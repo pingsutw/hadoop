@@ -14,15 +14,15 @@
 
 package org.apache.hadoop.yarn.submarine.client.cli;
 
+import java.util.Arrays;
+
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.yarn.conf.YarnConfiguration;
 import org.apache.hadoop.yarn.submarine.client.cli.runjob.RunJobCli;
 import org.apache.hadoop.yarn.submarine.common.ClientContext;
-import org.apache.hadoop.yarn.conf.YarnConfiguration;
 import org.apache.hadoop.yarn.submarine.runtimes.RuntimeFactory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
-import java.util.Arrays;
 
 public class Cli {
   private static final Logger LOG =
@@ -35,7 +35,9 @@ public class Cli {
     helpMsg.append("    job \n");
     helpMsg.append("       run : run a job, please see 'job run --help' for usage \n");
     helpMsg.append("       show : get status of job, please see 'job show --help' for usage \n");
-
+    helpMsg.append("    model \n");
+    helpMsg.append(
+        "       create : create a model, please see 'model create --help' for usage \n");
     System.out.println(helpMsg.toString());
   }
 
@@ -92,6 +94,14 @@ public class Cli {
         new RunJobCli(clientContext).run(moduleArgs);
       } else if (subCmd.equals(CliConstants.SHOW)) {
         new ShowJobCli(clientContext).run(moduleArgs);
+      } else {
+        printHelp();
+        throw new IllegalArgumentException("Unknown option for job");
+      }
+    } else if (args[0].equals("model")) {
+      String subCmd = args[1];
+      if (subCmd.equals(CliConstants.CREATE)) {
+        new CreateModelCli(clientContext).run(moduleArgs);
       } else {
         printHelp();
         throw new IllegalArgumentException("Unknown option for job");

@@ -66,6 +66,10 @@ public class FSBasedSubmarineStorageImpl extends SubmarineStorage {
   public Map<String, String> getModelInfoByName(String modelName,
       String version) throws IOException {
     Path modelInfoPath = getModelInfoPath(modelName, version, false);
+    // if model dosen't exist return null
+    if(!rdm.getDefaultFileSystem().exists(modelInfoPath)) {
+      return null;
+    }
     FSDataInputStream fis = rdm.getDefaultFileSystem().open(modelInfoPath);
     return deserializeMap(fis);
   }

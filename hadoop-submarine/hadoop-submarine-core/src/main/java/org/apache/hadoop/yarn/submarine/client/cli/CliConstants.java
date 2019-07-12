@@ -18,6 +18,9 @@ package org.apache.hadoop.yarn.submarine.client.cli;
  * NOTE: use lowercase + "_" for the option name
  */
 public class CliConstants {
+  public static final String VERSION = "version";
+  public static final String PATH = "path";
+  public static final String CREATE = "create";
   public static final String RUN = "run";
   public static final String SERVE = "serve";
   public static final String LIST = "list";
@@ -61,4 +64,5 @@ public class CliConstants {
   public static final String INSECURE_CLUSTER = "insecure";
 
   public static final String FRAMEWORK = "framework";
+  public static final String MODEL_PATH = "modelpath";
 }

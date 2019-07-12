@@ -21,4 +21,7 @@ public class StorageKeyConstants {
   public static final String CHECKPOINT_PATH = "CHECKPOINT_PATH";
   public static final String INPUT_PATH = "INPUT_PATH";
   public static final String SAVED_MODEL_PATH = "SAVED_MODEL_PATH";
+  public static final String MODEL_NAME = "MODEL_NAME";
+  public static final String MODEL_VERSION = "MODEL_VERSION";
+  public static final String MODEL_PATH = "MODEL_PATH";
 }
