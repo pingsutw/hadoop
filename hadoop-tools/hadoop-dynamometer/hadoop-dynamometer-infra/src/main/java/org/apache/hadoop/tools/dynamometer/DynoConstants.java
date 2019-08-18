@@ -17,12 +17,14 @@
  */
 package org.apache.hadoop.tools.dynamometer;
 
+import static org.apache.hadoop.yarn.api.records.LocalResourceType.ARCHIVE;
+import static org.apache.hadoop.yarn.api.records.LocalResourceType.FILE;
+
 import java.util.regex.Pattern;
+
 import org.apache.hadoop.classification.InterfaceAudience;
 import org.apache.hadoop.classification.InterfaceStability;
 import org.apache.hadoop.fs.PathFilter;
-
-import static org.apache.hadoop.yarn.api.records.LocalResourceType.*;
 
 /**
  * Constants used in both Client and Application Master.
@@ -31,7 +33,8 @@ import static org.apache.hadoop.yarn.api.records.LocalResourceType.*;
 @InterfaceStability.Unstable
 public final class DynoConstants {
 
-  private DynoConstants() {}
+  private DynoConstants() {
+  }
 
   // Directory to use for remote storage (a location on the remote FS which
   // can be accessed by all components). This will be the name of the directory
@@ -73,8 +76,9 @@ public final class DynoConstants {
   // The file name to use when localizing the block file on a DataNode; will be
   // suffixed with an integer
   public static final String BLOCK_LIST_RESOURCE_PATH_PREFIX = "blocks/block";
-  public static final PathFilter BLOCK_LIST_FILE_FILTER = (path) ->
-      DynoConstants.BLOCK_LIST_FILE_PATTERN.matcher(path.getName()).find();
+  public static final PathFilter BLOCK_LIST_FILE_FILTER =
+      (path) -> DynoConstants.BLOCK_LIST_FILE_PATTERN.matcher(path.getName())
+          .find();
 
   // Environment variable which will contain the full path of the directory
   // which should be used for remote (shared) storage
@@ -126,5 +130,16 @@ public final class DynoConstants {
   public static final String NN_SERVICERPC_PORT = "NN_SERVICERPC_PORT";
   // The port to use on the NameNode host when contacting for HTTP access
   public static final String NN_HTTP_PORT = "NN_HTTP_PORT";
+  // Total number of NameNodes which will be launched.
+  public static final String NUMTOTALNAMENODES = "numTotalNameNodes";
+  // Total number of JournalNodes which will be launched.
+  public static final String NUMTOTALJOURNALNODES = "numTotalJournalNodes";
 
+  public static final String NAMENODE = "namenode";
+
+  public static final String STANDBYNAMENODE = "standbynamenode";
+
+  public static final String DATANODE = "datanode";
+
+  public static final String JOURNALNODE = "journalnode";
 }

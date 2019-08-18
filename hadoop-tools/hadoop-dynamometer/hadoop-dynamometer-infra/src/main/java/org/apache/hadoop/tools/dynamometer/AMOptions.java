@@ -17,14 +17,16 @@
  */
 package org.apache.hadoop.tools.dynamometer;
 
-import com.google.common.base.Preconditions;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
+
 import org.apache.commons.cli.CommandLine;
 import org.apache.commons.cli.Options;
 import org.apache.hadoop.conf.Configuration;
+
+import com.google.common.base.Preconditions;
 
 /**
  * Options supplied to the Client which are then passed through to the
@@ -38,6 +40,9 @@ final class AMOptions {
   public static final String NAMENODE_VCORES_DEFAULT = "1";
   public static final String NAMENODE_NODELABEL_ARG = "namenode_nodelabel";
   public static final String NAMENODE_ARGS_ARG = "namenode_args";
+  public static final String NAMENODES_PER_CLUSTER_ARG =
+      "namenodes_per_cluster";
+  public static final String NAMENODES_PER_CLUSTER_DEFAULT = "1";
   public static final String DATANODE_MEMORY_MB_ARG = "datanode_memory_mb";
   public static final String DATANODE_MEMORY_MB_DEFAULT = "2048";
   public static final String DATANODE_VCORES_ARG = "datanode_vcores";
@@ -56,6 +61,17 @@ final class AMOptions {
   public static final String DATANODE_LAUNCH_DELAY_DEFAULT = "0s";
   public static final String NAMENODE_NAME_DIR_ARG = "namenode_name_dir";
   public static final String NAMENODE_EDITS_DIR_ARG = "namenode_edits_dir";
+  public static final String JOURNALNODE_MEMORY_MB_ARG =
+      "journalnode_memory_mb";
+  public static final String JOURNALNODE_MEMORY_MB_DEFAULT = "2048";
+  public static final String JOURNALNODE_VCORES_ARG = "journalnode_vcores";
+  public static final String JOURNALNODE_VCORES_DEFAULT = "1";
+  public static final String JOURNALNODE_NODELABEL_ARG =
+      "journalnode_nodelabel";
+  public static final String JOURNALNODE_ARGS_ARG = "journalnode_args";
+  public static final String JOURNALNODES_PER_CLUSTER_ARG =
+      "journalnodes_per_cluster";
+  public static final String JOURNALNODES_PER_CLUSTER_DEFAULT = "1";
 
   private final int datanodeMemoryMB;
   private final int datanodeVirtualCores;
@@ -70,6 +86,12 @@ final class AMOptions {
   private final int namenodeMetricsPeriod;
   private final String namenodeNameDir;
   private final String namenodeEditsDir;
+  private final int namenodesPerCluster;
+  private final int journalnodeMemoryMB;
+  private final int journalnodeVirtualCores;
+  private final String journalnodeArgs;
+  private final String journalnodeNodeLabelExpression;
+  private final int journalnodesPerCluster;
   // Original shellEnv as passed in through arguments
   private final Map<String, String> originalShellEnv;
   // Extended shellEnv including custom environment variables
@@ -81,8 +103,10 @@ final class AMOptions {
       int datanodesPerCluster, String datanodeLaunchDelay, int namenodeMemoryMB,
       int namenodeVirtualCores, String namenodeArgs,
       String namenodeNodeLabelExpression, int namenodeMetricsPeriod,
-      String namenodeNameDir, String namenodeEditsDir,
-      Map<String, String> shellEnv) {
+      String namenodeNameDir, String namenodeEditsDir, int namenodesPerCluster,
+      int journalnodeMemoryMB, int journalnodeVirtualCores,
+      String journalnodeArgs, String journalnodeNodeLabelExpression,
+      int journalnodesPerCluster, Map<String, String> shellEnv) {
     this.datanodeMemoryMB = datanodeMemoryMB;
     this.datanodeVirtualCores = datanodeVirtualCores;
     this.datanodeArgs = datanodeArgs;
@@ -96,7 +120,13 @@ final class AMOptions {
     this.namenodeMetricsPeriod = namenodeMetricsPeriod;
     this.namenodeNameDir = namenodeNameDir;
     this.namenodeEditsDir = namenodeEditsDir;
+    this.namenodesPerCluster = namenodesPerCluster;
     this.originalShellEnv = shellEnv;
+    this.journalnodeMemoryMB = journalnodeMemoryMB;
+    this.journalnodeVirtualCores = journalnodeVirtualCores;
+    this.journalnodeArgs = journalnodeArgs;
+    this.journalnodeNodeLabelExpression = journalnodeNodeLabelExpression;
+    this.journalnodesPerCluster = journalnodesPerCluster;
     this.shellEnv = new HashMap<>(this.originalShellEnv);
     this.shellEnv.put(DynoConstants.NN_ADDITIONAL_ARGS_ENV, this.namenodeArgs);
     this.shellEnv.put(DynoConstants.DN_ADDITIONAL_ARGS_ENV, this.datanodeArgs);
@@ -147,12 +177,23 @@ final class AMOptions {
     vargs.add("--" + DATANODE_LAUNCH_DELAY_ARG + " " + datanodeLaunchDelay);
     vargs.add("--" + NAMENODE_MEMORY_MB_ARG + " " + namenodeMemoryMB);
     vargs.add("--" + NAMENODE_VCORES_ARG + " " + namenodeVirtualCores);
+    vargs.add("--" + NAMENODES_PER_CLUSTER_ARG + " "
+        + String.valueOf(namenodesPerCluster));
     addStringValToVargs(vargs, NAMENODE_ARGS_ARG, namenodeArgs);
     addStringValToVargs(vargs, NAMENODE_NODELABEL_ARG,
         namenodeNodeLabelExpression);
     vargs.add("--" + NAMENODE_METRICS_PERIOD_ARG + " " + namenodeMetricsPeriod);
     addStringValToVargs(vargs, NAMENODE_NAME_DIR_ARG, namenodeNameDir);
     addStringValToVargs(vargs, NAMENODE_EDITS_DIR_ARG, namenodeEditsDir);
+    vargs.add("--" + JOURNALNODE_MEMORY_MB_ARG + " "
+        + String.valueOf(journalnodeMemoryMB));
+    vargs.add("--" + JOURNALNODE_VCORES_ARG + " "
+        + String.valueOf(journalnodeVirtualCores));
+    addStringValToVargs(vargs, JOURNALNODE_ARGS_ARG, journalnodeArgs);
+    addStringValToVargs(vargs, JOURNALNODE_NODELABEL_ARG,
+        journalnodeNodeLabelExpression);
+    vargs.add("--" + JOURNALNODES_PER_CLUSTER_ARG + " "
+        + String.valueOf(journalnodesPerCluster));
     for (Map.Entry<String, String> entry : originalShellEnv.entrySet()) {
       vargs.add(
           "--" + SHELL_ENV_ARG + " " + entry.getKey() + "=" + entry.getValue());
@@ -182,6 +223,22 @@ final class AMOptions {
     return datanodesPerCluster;
   }
 
+  int getJournalNodeMemoryMB() {
+    return journalnodeMemoryMB;
+  }
+
+  int getJournalNodeVirtualCores() {
+    return journalnodeVirtualCores;
+  }
+
+  String getJournalNodeLabelExpression() {
+    return journalnodeNodeLabelExpression;
+  }
+
+  int getJournalNodesPerCluster() {
+    return journalnodesPerCluster;
+  }
+
   long getDataNodeLaunchDelaySec() {
     // Leverage the human-readable time parsing capabilities of Configuration
     String tmpConfKey = "___temp_config_property___";
@@ -202,6 +259,10 @@ final class AMOptions {
     return namenodeNodeLabelExpression;
   }
 
+  int getNameNodesPerCluster() {
+    return namenodesPerCluster;
+  }
+
   Map<String, String> getShellEnv() {
     return shellEnv;
   }
@@ -210,8 +271,7 @@ final class AMOptions {
    * Set all of the command line options relevant to this class into the passed
    * {@link Options}.
    *
-   * @param opts
-   *          Where to set the command line options.
+   * @param opts Where to set the command line options.
    */
   static void setOptions(Options opts) {
     opts.addOption(SHELL_ENV_ARG, true,
@@ -243,6 +303,9 @@ final class AMOptions {
         "The directory to use for the NameNode's edits directory. "
             + "If not specified, a location  within the container's working "
             + "directory will be used.");
+    opts.addOption(NAMENODES_PER_CLUSTER_ARG, true,
+        "How many simulated NameNodes to run within each YARN container "
+            + "(default " + NAMENODES_PER_CLUSTER_DEFAULT + ")");
     opts.addOption(DATANODE_MEMORY_MB_ARG, true,
         "Amount of memory in MB to be requested to run the DNs (default "
             + DATANODE_MEMORY_MB_DEFAULT + ")");
@@ -262,6 +325,19 @@ final class AMOptions {
             + "be launched with some random delay less than  this value. "
             + "Accepts human-readable time durations (e.g. 10s, 1m) (default "
             + DATANODE_LAUNCH_DELAY_DEFAULT + ")");
+    opts.addOption(JOURNALNODE_MEMORY_MB_ARG, true,
+        "Amount of memory in MB to be requested to run the DNs (default "
+            + JOURNALNODE_MEMORY_MB_DEFAULT + ")");
+    opts.addOption(JOURNALNODE_VCORES_ARG, true,
+        "Amount of virtual cores to be requested to run the DNs (default "
+            + JOURNALNODE_VCORES_DEFAULT + ")");
+    opts.addOption(JOURNALNODE_ARGS_ARG, true,
+        "Additional arguments to add when starting the DataNodes.");
+    opts.addOption(JOURNALNODE_NODELABEL_ARG, true,
+        "The node label to specify for the container to use to run the JournalNode.");
+    opts.addOption(JOURNALNODES_PER_CLUSTER_ARG, true,
+        "How many simulated DataNodes to run within each YARN container "
+            + "(default " + JOURNALNODES_PER_CLUSTER_DEFAULT + ")");
 
     opts.addOption("help", false, "Print usage");
   }
@@ -269,8 +345,7 @@ final class AMOptions {
   /**
    * Initialize an {@code AMOptions} from a command line parser.
    *
-   * @param cliParser
-   *          Where to initialize from.
+   * @param cliParser Where to initialize from.
    * @return A new {@code AMOptions} filled out with options from the parser.
    */
   static AMOptions initFromParser(CommandLine cliParser) {
@@ -311,7 +386,19 @@ final class AMOptions {
         Integer.parseInt(cliParser.getOptionValue(NAMENODE_METRICS_PERIOD_ARG,
             NAMENODE_METRICS_PERIOD_DEFAULT)),
         cliParser.getOptionValue(NAMENODE_NAME_DIR_ARG, ""),
-        cliParser.getOptionValue(NAMENODE_EDITS_DIR_ARG, ""), originalShellEnv);
+        cliParser.getOptionValue(NAMENODE_EDITS_DIR_ARG, ""),
+        Integer.parseInt(cliParser.getOptionValue(NAMENODES_PER_CLUSTER_ARG,
+            NAMENODES_PER_CLUSTER_DEFAULT)),
+        Integer.parseInt(cliParser.getOptionValue(JOURNALNODE_MEMORY_MB_ARG,
+            JOURNALNODE_MEMORY_MB_DEFAULT)),
+        Integer.parseInt(cliParser.getOptionValue(JOURNALNODE_VCORES_ARG,
+            JOURNALNODE_VCORES_DEFAULT)),
+        cliParser.getOptionValue(JOURNALNODE_ARGS_ARG, ""),
+        cliParser.getOptionValue(JOURNALNODE_NODELABEL_ARG, ""),
+        Integer.parseInt(cliParser.getOptionValue(JOURNALNODES_PER_CLUSTER_ARG,
+            JOURNALNODES_PER_CLUSTER_DEFAULT)),
+        originalShellEnv);
+
   }
 
 }

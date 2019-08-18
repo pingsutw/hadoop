@@ -17,7 +17,11 @@
 
 # Script for launching Dynamometer components within YARN containers.
 # USAGE:
-# ./start-component.sh namenode hdfs_storage
+# ./start-component.sh namenode hdfs_storage number_of_namenode
+# OR
+# ./start-component.sh standbynamenode hdfs_storage number_of_standbynamenode
+# OR
+# ./start-component.sh journalnode hdfs_storage number_of_journalnode
 # OR
 # ./start-component.sh datanode nn_servicerpc_address sleep_time_sec
 # First parameter should be component being launched, either `datanode` or `namenode`
@@ -32,16 +36,31 @@
 #   DataNodes within the same JVM, and they will store their block files in memory.
 
 component="$1"
-if [[ "$component" != "datanode" && "$component" != "namenode" ]]; then
+if [[ "$component" != "datanode" && "$component" != "namenode" && "$component" != "standbynamenode" && "$component" != "journalnode" ]]; then
   echo "Unknown component type: '${component}'"
   exit 1
 fi
 if [[ "$component" = "namenode" ]]; then
-  if [[ $# -lt 2 ]]; then
+  if [[ $# -lt 3 ]]; then
     echo "Not enough arguments for NameNode"
     exit 1
   fi
   hdfsStoragePath="$2"
+  num_nameNode="$3"
+elif [[ "$component" = "standbynamenode" ]]; then
+  if [[ $# -lt 3 ]]; then
+    echo "Not enough arguments for standbyNameNode"
+    exit 1
+  fi
+  hdfsStoragePath="$2"
+  num_standbyNameNode="$3"
+elif [[ "$component" = "journalnode" ]]; then
+  if [[ $# -lt 3 ]]; then
+    echo "Not enough arguments for NameNode"
+    exit 1
+  fi
+  hdfsStoragePath="$2"
+  num_journalNode="$3"
 else
   if [[ $# -lt 3 ]]; then
     echo "Not enough arguments for DataNode"
@@ -68,6 +87,7 @@ pidDir="$baseDir/pid"
 baseHttpPort=50075
 baseRpcPort=9000
 baseServiceRpcPort=9020
+baseShareEditPort=8485
 
 rm -rf "$baseDir"
 mkdir -p "$pidDir"
@@ -138,7 +158,6 @@ configOverrides=(
   -D "hadoop.security.authentication=simple"
   -D "hadoop.security.authorization=false"
   -D "dfs.http.policy=HTTP_ONLY"
-  -D "dfs.nameservices="
   -D "dfs.web.authentication.kerberos.principal="
   -D "dfs.web.authentication.kerberos.keytab="
   -D "hadoop.http.filter.initializers="
@@ -149,6 +168,22 @@ configOverrides=(
 )
 # NOTE: Must manually unset dfs.namenode.shared.edits.dir in configs
 #       because setting it to be empty is not enough (must be null)
+
+nnConfigsOverrides=(
+    -D "dfs.namenode.kerberos.internal.spnego.principal="
+    -D "dfs.hosts="
+    -D "dfs.hosts.exclude="
+    -D "dfs.namenode.legacy-oiv-image.dir="
+    -D "dfs.namenode.kerberos.principal="
+    -D "dfs.namenode.keytab.file="
+    -D "dfs.namenode.safemode.threshold-pct=0.0f"
+    -D "dfs.permissions.enabled=true"
+    -D "dfs.cluster.administrators=\"*\""
+    -D "dfs.block.replicator.classname=org.apache.hadoop.tools.dynamometer.BlockPlacementPolicyAlwaysSatisfied"
+    -D "hadoop.security.impersonation.provider.class=org.apache.hadoop.tools.dynamometer.AllowAllImpersonationProvider"
+    ${configOverrides[@]}
+  )
+
 
 if [[ "$component" = "datanode" ]]; then
 
@@ -216,9 +251,12 @@ elif [[ "$component" = "namenode" ]]; then
   nnRpcPort="$(find_available_port "$baseRpcPort")"
   nnServiceRpcPort="$(find_available_port "$baseServiceRpcPort")"
   nnHttpPort="$(find_available_port "$baseHttpPort")"
+  nnShareEditPort="$(find_available_port "$baseShareEditPort")"
 
   nnInfoLocalPath="$(pwd)/nn_info.prop"
+  HAConfigLocalPath="$(pwd)/HA_config.prop"
   rm -f "$nnInfoLocalPath"
+  rm -f "$HAConfigLocalPath"
   # Port and host information to be uploaded to the non-Dynamometer HDFS
   # to be consumed by the AM and Client
   cat > "$nnInfoLocalPath" << EOF
@@ -229,6 +267,62 @@ NN_HTTP_PORT=${nnHttpPort}
 NM_HTTP_PORT=${NM_HTTP_PORT}
 CONTAINER_ID=${CONTAINER_ID}
 EOF
+  if [[ "$num_nameNode" -gt 1 ]]; then
+    echo dfs.nameservices=dyno-cluster >> $nnInfoLocalPath
+  else
+    echo dfs.nameservices= >> $nnInfoLocalPath
+  fi
+
+  nameDir="${NN_NAME_DIR:-${baseDir}/name-data}"
+  editsDir="${NN_EDITS_DIR:-${baseDir}/name-data}"
+  checkpointDir="$baseDir/checkpoint"
+  rm -rf "$nameDir" "$editsDir" "$checkpointDir"
+  mkdir -p "$nameDir/current" "$editsDir/current" "$checkpointDir"
+  chmod -R 700 "$nameDir" "$editsDir" "$checkpointDir"
+  # Link all of the fsimage files into the name dir
+  find "$(pwd)" -maxdepth 1 -mindepth 1 \( -name "fsimage_*" -or -name "VERSION" \) -execdir ln -snf "$(pwd)/{}" "$nameDir/current/{}" \;
+  chmod 700 "$nameDir"/current/*
+
+  namenodeConfigs=(
+    -D "dfs.namenode.name.dir=file://${nameDir}"
+    -D "dfs.namenode.edits.dir=file://${editsDir}"
+    -D "dfs.namenode.checkpoint.dir=file://${baseDir}/checkpoint"
+  )
+  for i in $(eval echo "{1..$num_nameNode}");
+  do
+    ha_clusters="${ha_clusters}nn${i},";
+  done
+
+  if [[ $num_nameNode -gt 1 ]]; then
+    HAConfigs=( 
+      -D "dfs.ha.namenodes.ha-cluster=${ha_clusters}" 
+      -D "dfs.namenode.rpc-address.ha-cluster.nn1=${nnHostname}:${nnRpcPort}" 
+      -D "dfs.namenode.servicerpc-address.ha-cluster.nn1=${nnHostname}:${nnServiceRpcPort}" 
+      -D "dfs.namenode.http-address.ha-cluster.nn1=${nnHostname}:${nnHttpPort}" 
+      -D "dfs.namenode.https-address.ha-cluster.nn1=${nnHostname}:0" 
+      -D "dfs.namenode.shared.edits.dir=qjournal://${nnHostname}:${nnShareEditPort}/ha-cluster"
+      -D "fs.defaultFS=hdfs://ha-cluster" 
+      -D "dfs.nameservices=ha-cluster"
+    )
+    echo -n "${HAConfigs[@]} " > $HAConfigLocalPath
+  else
+    namenodeConfigs=(
+       ${namenodeConfigs[@]}
+      -D "fs.defaultFS=hdfs://${nnHostname}:${nnRpcPort}"
+      -D "dfs.namenode.rpc-address=${nnHostname}:${nnRpcPort}" 
+      -D "dfs.namenode.servicerpc-address=${nnHostname}:${nnServiceRpcPort}" 
+      -D "dfs.namenode.http-address=${nnHostname}:${nnHttpPort}" 
+      -D "dfs.namenode.https-address=${nnHostname}:0" 
+    )
+  fi
+  if [[ $num_nameNode -gt 1 ]]; then
+    echo "Using the following configs for the namenode:"
+    cat "$HAConfigLocalPath"
+    HAConfigRemotePath="$hdfsStoragePath/HA_config.prop"
+    hdfs_original dfs -copyFromLocal -f "$HAConfigLocalPath" "$HAConfigRemotePath"
+    echo "Uploaded namenode config info to $HAConfigRemotePath"
+  fi
+
   echo "Using the following ports for the namenode:"
   cat "$nnInfoLocalPath"
   nnInfoRemotePath="$hdfsStoragePath/nn_info.prop"
@@ -253,6 +347,102 @@ namenode.sink.dyno-file.filename=${nnMetricOutputFileLocal}
 EOF
   fi
 
+  # waiting other namenodes upload configuration to $nnInfoRemotePath
+  if [[ $num_nameNode -gt 1 ]]; then
+    lines=$(wc -l < $nnInfoLocalPath)
+    index=$(($lines / 6))
+    while [ "$index" -lt $num_nameNode ];
+    do
+      rm -f "$nnInfoLocalPath";
+      while ! hdfs_original dfs -copyToLocal -f "$nnInfoRemotePath" "$nnInfoLocalPath" ;
+      do
+        echo "Can not copy $nnInfoRemotePath to $nnInfoLocalPath";
+        sleep 1;
+      done
+      lines=$(wc -l < $nnInfoLocalPath)
+      index=$(($lines / 6))
+    done
+    rm -f "$HAConfigLocalPath";
+    while ! hdfs_original dfs -copyToLocal -f "$HAConfigRemotePath" "$HAConfigLocalPath" ;
+    do 
+      echo "Can not copy $HAConfigRemotePath to $HAConfigLocalPath"
+      sleep 1;
+    done
+    HAConfigsString=`cat $HAConfigLocalPath`
+    HAConfigs=($HAConfigsString)
+  fi
+  HAConfigs=( ${HAConfigs[@]} ${nnConfigsOverrides[@]} )
+  #echo ${namenodeConfigs[@]} > $HAConfigLocalPath
+  #namenodeConfigsString=`cat $HAConfigLocalPath`
+  #namenodeConfigs=($namenodeConfigsString)
+  echo "Testing : ${HAConfigs[5]}"
+  echo "Executing the following:"
+  echo "${HADOOP_HOME}/sbin/hadoop-daemon.sh start namenode" "${HAConfigs[@]}" "${namenodeConfigs[@]}"  "$NN_ADDITIONAL_ARGS"
+  # The argument splitting of NN_ADDITIONAL_ARGS is desirable behavior here
+  # shellcheck disable=SC2086
+  if ! "${HADOOP_HOME}/sbin/hadoop-daemon.sh" start namenode "${HAConfigs[@]}" "${namenodeConfigs[@]}"  $NN_ADDITIONAL_ARGS; then
+    echo "Unable to launch NameNode; exiting."
+    exit 1
+  fi
+  componentPIDFile="${pidDir}/hadoop-$(whoami)-${component}.pid"
+  while [[ ! -f "$componentPIDFile" ]]; do sleep 1; done
+  componentPID=$(cat "$componentPIDFile")
+
+  if [[ "$NN_FILE_METRIC_PERIOD" -gt 0 ]]; then
+    nnMetricOutputFileRemote="$hdfsStoragePath/namenode_metrics"
+    echo "Going to attempt to upload metrics to: $nnMetricOutputFileRemote"
+
+    touch "$nnMetricOutputFileLocal"
+    (tail -n 999999 -f "$nnMetricOutputFileLocal" & echo $! >&3) 3>metricsTailPIDFile | \
+      hdfs_original dfs -appendToFile - "$nnMetricOutputFileRemote" &
+    metricsTailPID="$(cat metricsTailPIDFile)"
+    if [[ "$metricsTailPID" = "" ]]; then
+      echo "Unable to upload metrics to HDFS"
+    else
+      echo "Metrics will be uploaded to HDFS by PID: $metricsTailPID"
+    fi
+  fi
+elif [[ "$component" = "standbynamenode" ]]; then
+
+  nnInfoLocalPath="$(pwd)/nn_info.prop"
+  HAConfigLocalPath="$(pwd)/HA_config.prop"
+  rm -f "$nnInfoLocalPath"
+  rm -f "$HAConfigLocalPath"
+  nnInfoRemotePath="$hdfsStoragePath/nn_info.prop"
+  HAConfigRemotePath="$hdfsStoragePath/HA_config.prop"
+
+  while ! hdfs_original dfs -copyToLocal -f "$nnInfoRemotePath" "$nnInfoLocalPath" || ! hdfs_original dfs -rm  "$nnInfoRemotePath" ; 
+  do
+    rm -f "$nnInfoLocalPath";
+    sleep 1;
+  done
+  lines=$(wc -l < $nnInfoLocalPath)
+  index=$(($lines / 6 + 1))
+
+  while ! hdfs_original dfs -copyToLocal -f "$HAConfigRemotePath" "$HAConfigLocalPath" || ! hdfs_original dfs -rm  "$HAConfigRemotePath" ;
+  do
+    rm -f "$HAConfigLocalPath";
+    sleep 1;
+  done
+  HAConfigsString=`cat ${HAConfigLocalPath}`
+  HAConfigs=($HAConfigsString)
+
+  nnHostname="${NM_HOST}"
+  nnRpcPort="$(find_available_port "$baseRpcPort")"
+  nnServiceRpcPort="$(find_available_port "$baseServiceRpcPort")"
+  nnHttpPort="$(find_available_port "$baseHttpPort")"
+
+  # Port and host information to be uploaded to the non-Dynamometer HDFS
+  # to be consumed by the AM and Client
+  cat >> "$nnInfoLocalPath" << EOF
+NN_HOSTNAME-$index=${nnHostname}
+NN_RPC_PORT-$index=${nnRpcPort}
+NN_SERVICERPC_PORT-$index=${nnServiceRpcPort}
+NN_HTTP_PORT-$index=${nnHttpPort}
+NM_HTTP_PORT-$index=${NM_HTTP_PORT}
+CONTAINER_ID-$index=${CONTAINER_ID}
+EOF
+  
   nameDir="${NN_NAME_DIR:-${baseDir}/name-data}"
   editsDir="${NN_EDITS_DIR:-${baseDir}/name-data}"
   checkpointDir="$baseDir/checkpoint"
@@ -264,36 +454,85 @@ EOF
   chmod 700 "$nameDir"/current/*
 
   namenodeConfigs=(
-    -D "fs.defaultFS=hdfs://${nnHostname}:${nnRpcPort}"
-    -D "dfs.namenode.rpc-address=${nnHostname}:${nnRpcPort}"
-    -D "dfs.namenode.servicerpc-address=${nnHostname}:${nnServiceRpcPort}"
-    -D "dfs.namenode.http-address=${nnHostname}:${nnHttpPort}"
-    -D "dfs.namenode.https-address=${nnHostname}:0"
     -D "dfs.namenode.name.dir=file://${nameDir}"
     -D "dfs.namenode.edits.dir=file://${editsDir}"
     -D "dfs.namenode.checkpoint.dir=file://${baseDir}/checkpoint"
-    -D "dfs.namenode.kerberos.internal.spnego.principal="
-    -D "dfs.hosts="
-    -D "dfs.hosts.exclude="
-    -D "dfs.namenode.legacy-oiv-image.dir="
-    -D "dfs.namenode.kerberos.principal="
-    -D "dfs.namenode.keytab.file="
-    -D "dfs.namenode.safemode.threshold-pct=0.0f"
-    -D "dfs.permissions.enabled=true"
-    -D "dfs.cluster.administrators=\"*\""
-    -D "dfs.block.replicator.classname=org.apache.hadoop.tools.dynamometer.BlockPlacementPolicyAlwaysSatisfied"
-    -D "hadoop.security.impersonation.provider.class=org.apache.hadoop.tools.dynamometer.AllowAllImpersonationProvider"
-    ${configOverrides[@]}
   )
+  HAConfigs=( 
+      -D "dfs.namenode.rpc-address.ha-cluster.nn$index=${nnHostname}:${nnRpcPort}" 
+      -D "dfs.namenode.servicerpc-address.ha-cluster.nn$index=${nnHostname}:${nnServiceRpcPort}" 
+      -D "dfs.namenode.http-address.ha-cluster.nn$index=${nnHostname}:${nnHttpPort}" 
+      -D "dfs.namenode.https-address.ha-cluster.nn$index=${nnHostname}:0" 
+      -D "dfs.namenode.shared.edits.dir=qjournal://${nnHostname}:${nnShareEditPort}/ha-cluster"
+  )
+  echo -n "${HAConfigs[@]} " >> $HAConfigLocalPath
+
+  if [[ "$NN_FILE_METRIC_PERIOD" -gt 0 ]]; then
+    nnMetricOutputFileLocal="$HADOOP_LOG_DIR/namenode_metrics"
+    nnMetricPropsFileLocal="$extraClasspathDir/hadoop-metrics2-namenode.properties"
+    if [[ -f "$confDir/hadoop-metrics2-namenode.properties" ]]; then
+      cp "$confDir/hadoop-metrics2-namenode.properties" "$nnMetricPropsFileLocal"
+      chmod u+w "$nnMetricPropsFileLocal"
+    elif [[ -f "$confDir/hadoop-metrics2.properties" ]]; then
+      cp "$confDir/hadoop-metrics2.properties" "$nnMetricPropsFileLocal"
+      chmod u+w "$nnMetricPropsFileLocal"
+    fi
+    cat >> "$nnMetricPropsFileLocal" << EOF
+namenode.sink.dyno-file.period=${NN_FILE_METRIC_PERIOD}
+namenode.sink.dyno-file.class=org.apache.hadoop.metrics2.sink.FileSink
+namenode.sink.dyno-file.filename=${nnMetricOutputFileLocal}
+EOF
+  fi
+
+  echo "Using the following configs for the standbynamenode:"
+  cat "$HAConfigLocalPath"
+  HAConfigRemotePath="$hdfsStoragePath/HA_config.prop"
+  hdfs_original dfs -copyFromLocal -f "$HAConfigLocalPath" "$HAConfigRemotePath"
+  echo "Uploaded namenode config info to $HAConfigRemotePath"
+
+  echo "Using the following ports for the standbynamenode:"
+  cat "$nnInfoLocalPath"
+  nnInfoRemotePath="$hdfsStoragePath/nn_info.prop"
+  # We use the original conf dir since we are uploading to the non-dynamometer cluster
+  hdfs_original dfs -copyFromLocal -f "$nnInfoLocalPath" "$nnInfoRemotePath"
+  echo "Uploaded namenode port info to $nnInfoRemotePath"
+
+
+
+  # waiting other namenodes upload configuration to $nnInfoRemotePath
+  lines=$(wc -l < $nnInfoLocalPath)
+  index=$(($lines / 6))
+  while [ "$index" -lt $num_standbyNameNode ];
+  do
+    rm -f "$nnInfoLocalPath";
+    while ! hdfs_original dfs -copyToLocal -f "$nnInfoRemotePath" "$nnInfoLocalPath" ;
+    do
+      echo "Can not copy $nnInfoRemotePath to $nnInfoLocalPath";
+      sleep 1;
+    done
+    lines=$(wc -l < $nnInfoLocalPath)
+    index=$(($lines / 6))
+  done
+  rm -f "$HAConfigLocalPath";
+  while ! hdfs_original dfs -copyToLocal -f "$HAConfigRemotePath" "$HAConfigLocalPath" ;
+  do
+    echo "Can not copy $HAConfigRemotePath to $HAConfigLocalPath"
+    sleep 1;
+  done
+  HAConfigsString=`cat ${HAConfigLocalPath}`
+  HAConfigs=($HAConfigsString)
+
+  HAConfigs=( ${HAConfigs[@]} ${nnConfigsOverrides[@]} )
 
   echo "Executing the following:"
-  echo "${HADOOP_HOME}/sbin/hadoop-daemon.sh start namenode" "${namenodeConfigs[@]}" "$NN_ADDITIONAL_ARGS"
+  echo "${HADOOP_HOME}/sbin/hadoop-daemon.sh start namenode" "${HAConfigs[@]}" "${namenodeConfigs[@]}" "$NN_ADDITIONAL_ARGS"
   # The argument splitting of NN_ADDITIONAL_ARGS is desirable behavior here
   # shellcheck disable=SC2086
-  if ! "${HADOOP_HOME}/sbin/hadoop-daemon.sh" start namenode "${namenodeConfigs[@]}" $NN_ADDITIONAL_ARGS; then
-    echo "Unable to launch NameNode; exiting."
+  if ! "${HADOOP_HOME}/sbin/hadoop-daemon.sh" start namenode " ${HAConfigs[@]}" "${namenodeConfigs[@]}" $NN_ADDITIONAL_ARGS; then
+    echo "Unable to launch StandbyNameNode; exiting."
     exit 1
   fi
+
   componentPIDFile="${pidDir}/hadoop-$(whoami)-${component}.pid"
   while [[ ! -f "$componentPIDFile" ]]; do sleep 1; done
   componentPID=$(cat "$componentPIDFile")

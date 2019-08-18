@@ -17,14 +17,13 @@
  */
 package org.apache.hadoop.tools.dynamometer;
 
-import com.google.common.collect.Sets;
-import java.util.Optional;
-import java.util.concurrent.TimeoutException;
-import java.util.concurrent.TimeUnit;
-import java.util.function.Supplier;
-import org.apache.hadoop.test.PlatformAssumptions;
-import org.apache.hadoop.tools.dynamometer.workloadgenerator.audit.AuditLogDirectParser;
-import org.apache.hadoop.tools.dynamometer.workloadgenerator.audit.AuditReplayMapper;
+import static org.apache.hadoop.hdfs.MiniDFSCluster.PROP_TEST_BUILD_DATA;
+import static org.apache.hadoop.tools.dynamometer.DynoInfraUtils.fetchHadoopTarball;
+import static org.hamcrest.CoreMatchers.notNullValue;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
+
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
@@ -37,11 +36,16 @@ import java.net.URL;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Properties;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.function.Supplier;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
+
 import org.apache.commons.io.FileUtils;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FSDataInputStream;
@@ -53,8 +57,11 @@ import org.apache.hadoop.fs.permission.FsPermission;
 import org.apache.hadoop.hdfs.DistributedFileSystem;
 import org.apache.hadoop.hdfs.MiniDFSCluster;
 import org.apache.hadoop.io.IOUtils;
-import org.apache.hadoop.test.GenericTestUtils;
 import org.apache.hadoop.mapreduce.Counters;
+import org.apache.hadoop.test.GenericTestUtils;
+import org.apache.hadoop.test.PlatformAssumptions;
+import org.apache.hadoop.tools.dynamometer.workloadgenerator.audit.AuditLogDirectParser;
+import org.apache.hadoop.tools.dynamometer.workloadgenerator.audit.AuditReplayMapper;
 import org.apache.hadoop.util.JarFinder;
 import org.apache.hadoop.util.Shell;
 import org.apache.hadoop.yarn.api.records.ApplicationId;
@@ -80,12 +87,7 @@ import org.junit.Test;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import static org.apache.hadoop.tools.dynamometer.DynoInfraUtils.fetchHadoopTarball;
-import static org.apache.hadoop.hdfs.MiniDFSCluster.PROP_TEST_BUILD_DATA;
-import static org.hamcrest.CoreMatchers.notNullValue;
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.fail;
+import com.google.common.collect.Sets;
 
 /**
  * Start a Dynamometer cluster in a MiniYARNCluster. Ensure that the NameNode is
@@ -158,7 +160,7 @@ public class TestDynamometerInfra {
         System.getenv("JAVA_HOME"), notNullValue());
     try {
       Shell.ShellCommandExecutor tarCheck = new Shell.ShellCommandExecutor(
-          new String[]{"bash", "-c", "command -v tar"});
+          new String[] { "bash", "-c", "command -v tar" });
       tarCheck.execute();
       Assume.assumeTrue("tar command is not available",
           tarCheck.getExitCode() == 0);
@@ -168,13 +170,13 @@ public class TestDynamometerInfra {
 
     conf = new Configuration();
     // Follow the conventions of MiniDFSCluster
-    testBaseDir = new File(
-        System.getProperty(PROP_TEST_BUILD_DATA, "build/test/data"));
-    String hadoopBinVersion = System.getProperty(HADOOP_BIN_VERSION_KEY,
-        HADOOP_BIN_VERSION_DEFAULT);
+    testBaseDir =
+        new File(System.getProperty(PROP_TEST_BUILD_DATA, "build/test/data"));
+    String hadoopBinVersion =
+        System.getProperty(HADOOP_BIN_VERSION_KEY, HADOOP_BIN_VERSION_DEFAULT);
     if (System.getProperty(HADOOP_BIN_PATH_KEY) == null) {
-      hadoopTarballPath = fetchHadoopTarball(testBaseDir, hadoopBinVersion,
-          conf, LOG);
+      hadoopTarballPath =
+          fetchHadoopTarball(testBaseDir, hadoopBinVersion, conf, LOG);
     } else {
       hadoopTarballPath = new File(System.getProperty(HADOOP_BIN_PATH_KEY));
     }
@@ -194,8 +196,8 @@ public class TestDynamometerInfra {
     assertTrue("Failed to make temporary directory",
         hadoopUnpackedDir.mkdirs());
     Shell.ShellCommandExecutor shexec = new Shell.ShellCommandExecutor(
-        new String[] {"tar", "xzf", hadoopTarballPath.getAbsolutePath(), "-C",
-            hadoopUnpackedDir.getAbsolutePath()});
+        new String[] { "tar", "xzf", hadoopTarballPath.getAbsolutePath(), "-C",
+            hadoopUnpackedDir.getAbsolutePath() });
     shexec.execute();
     if (shexec.getExitCode() != 0) {
       fail("Unable to execute tar to expand Hadoop binary");
@@ -203,7 +205,7 @@ public class TestDynamometerInfra {
 
     conf.setInt(YarnConfiguration.RM_SCHEDULER_MINIMUM_ALLOCATION_MB, 128);
     conf.setBoolean(YarnConfiguration.NODE_LABELS_ENABLED, true);
-    for (String q : new String[] {"root", "root.default"}) {
+    for (String q : new String[] { "root", "root.default" }) {
       conf.setInt(CapacitySchedulerConfiguration.PREFIX + q + "."
           + CapacitySchedulerConfiguration.CAPACITY, 100);
       String accessibleNodeLabelPrefix = CapacitySchedulerConfiguration.PREFIX
@@ -246,8 +248,8 @@ public class TestDynamometerInfra {
     // (partially written)
     try (ByteArrayOutputStream bytesOut = new ByteArrayOutputStream()) {
       yarnConf.writeXml(bytesOut);
-      try (OutputStream fileOut = new FileOutputStream(
-          new File(url.getPath()))) {
+      try (OutputStream fileOut =
+          new FileOutputStream(new File(url.getPath()))) {
         fileOut.write(bytesOut.toByteArray());
       }
     }
@@ -333,9 +335,9 @@ public class TestDynamometerInfra {
         return true;
       }
     };
-    Optional<Properties> namenodeProperties = DynoInfraUtils
-        .waitForAndGetNameNodeProperties(exitCheckSupplier, localConf,
-            client.getNameNodeInfoPath(), LOG);
+    Optional<Properties> namenodeProperties =
+        DynoInfraUtils.waitForAndGetNameNodeProperties(exitCheckSupplier,
+            localConf, client.getNameNodeInfoPath(), LOG);
     if (!namenodeProperties.isPresent()) {
       fail("Unable to fetch NameNode properties");
     }
@@ -345,12 +347,12 @@ public class TestDynamometerInfra {
 
     assertClusterIsFunctional(localConf, namenodeProperties.get());
 
-    Map<ContainerId, Container> namenodeContainers = miniYARNCluster
-        .getNodeManager(0).getNMContext().getContainers();
-    Map<ContainerId, Container> datanodeContainers = miniYARNCluster
-        .getNodeManager(1).getNMContext().getContainers();
-    Map<ContainerId, Container> amContainers = miniYARNCluster.getNodeManager(2)
-        .getNMContext().getContainers();
+    Map<ContainerId, Container> namenodeContainers =
+        miniYARNCluster.getNodeManager(0).getNMContext().getContainers();
+    Map<ContainerId, Container> datanodeContainers =
+        miniYARNCluster.getNodeManager(1).getNMContext().getContainers();
+    Map<ContainerId, Container> amContainers =
+        miniYARNCluster.getNodeManager(2).getNMContext().getContainers();
     assertEquals(1, namenodeContainers.size());
     assertEquals(2,
         namenodeContainers.keySet().iterator().next().getContainerId());
@@ -384,10 +386,8 @@ public class TestDynamometerInfra {
     LOG.info("Waiting for infra application to exit");
     GenericTestUtils.waitFor(() -> {
       try {
-        ApplicationReport report = yarnClient
-            .getApplicationReport(infraAppId);
-        return report
-              .getYarnApplicationState() == YarnApplicationState.KILLED;
+        ApplicationReport report = yarnClient.getApplicationReport(infraAppId);
+        return report.getYarnApplicationState() == YarnApplicationState.KILLED;
       } catch (IOException | YarnException e) {
         return false;
       }
@@ -522,8 +522,8 @@ public class TestDynamometerInfra {
    * Look for the resource files relevant to {@code hadoopBinVersion} and upload
    * them onto the MiniDFSCluster's HDFS for use by the subsequent jobs.
    *
-   * @param hadoopBinVersion
-   *          The version string (e.g. "3.1.1") for which to look for resources.
+   * @param hadoopBinVersion The version string (e.g. "3.1.1") for which to look
+   *          for resources.
    */
   private static void uploadFsimageResourcesToHDFS(String hadoopBinVersion)
       throws IOException {
@@ -534,8 +534,8 @@ public class TestDynamometerInfra {
           "At least major and minor version are required to be specified; got: "
               + hadoopBinVersion);
     }
-    String hadoopResourcesPath = "hadoop_" + versionComponents[0] + "_"
-        + versionComponents[1];
+    String hadoopResourcesPath =
+        "hadoop_" + versionComponents[0] + "_" + versionComponents[1];
     String fsImageResourcePath = hadoopResourcesPath + "/" + FSIMAGE_FILENAME;
     fs.copyFromLocalFile(new Path(getResourcePath(fsImageResourcePath)),
         fsImageTmpPath);
@@ -551,18 +551,18 @@ public class TestDynamometerInfra {
             .getResourceAsStream("audit_trace_direct/audit0"),
         fs.create(new Path(auditTraceDir, "audit0")), conf, true);
     fs.mkdirs(blockImageOutputDir);
-    for (String blockFile : new String[] {"dn0-a-0-r-00000", "dn1-a-0-r-00001",
-        "dn2-a-0-r-00002"}) {
+    for (String blockFile : new String[] { "dn0-a-0-r-00000", "dn1-a-0-r-00001",
+        "dn2-a-0-r-00002" }) {
       IOUtils.copyBytes(
           TestDynamometerInfra.class.getClassLoader()
               .getResourceAsStream("blocks/" + blockFile),
           fs.create(new Path(blockImageOutputDir, blockFile)), conf, true);
     }
     File tempConfZip = new File(testBaseDir, "conf.zip");
-    ZipOutputStream zos = new ZipOutputStream(
-        new FileOutputStream(tempConfZip));
-    for (String file : new String[] {"core-site.xml", "hdfs-site.xml",
-        "log4j.properties"}) {
+    ZipOutputStream zos =
+        new ZipOutputStream(new FileOutputStream(tempConfZip));
+    for (String file : new String[] { "core-site.xml", "hdfs-site.xml",
+        "log4j.properties" }) {
       zos.putNextEntry(new ZipEntry("etc/hadoop/" + file));
       InputStream is = TestDynamometerInfra.class.getClassLoader()
           .getResourceAsStream("conf/etc/hadoop/" + file);
