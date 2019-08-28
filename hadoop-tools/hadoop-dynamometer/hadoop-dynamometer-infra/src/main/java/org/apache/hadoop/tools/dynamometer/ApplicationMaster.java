@@ -42,6 +42,7 @@ import org.apache.commons.lang3.StringUtils;
 import org.apache.hadoop.classification.InterfaceAudience;
 import org.apache.hadoop.classification.InterfaceStability;
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.FSDataOutputStream;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
@@ -269,6 +270,16 @@ public class ApplicationMaster {
 
     remoteStoragePath =
         new Path(envs.get(DynoConstants.REMOTE_STORAGE_PATH_ENV));
+    try {
+      Configuration config = new Configuration();
+      Path tmp = new Path(remoteStoragePath, "test.txt");
+      FileSystem fs = tmp.getFileSystem(config);
+      FSDataOutputStream fout = fs.create(tmp);
+    } catch (IOException e) {
+      // TODO Auto-generated catch block
+      e.printStackTrace();
+    }
+
     applicationAcls = new HashMap<>();
     applicationAcls.put(ApplicationAccessType.VIEW_APP,
         envs.get(DynoConstants.JOB_ACL_VIEW_ENV));
@@ -1041,7 +1052,7 @@ public class ApplicationMaster {
    * Return true iff {@code containerId} represents a JournalNode container.
    */
   private boolean isJournalNode(ContainerId containerId) {
-    return namenodeContainer != null
+    return journalnodeContainers != null
         && journalnodeContainers.containsKey(containerId);
   }
 

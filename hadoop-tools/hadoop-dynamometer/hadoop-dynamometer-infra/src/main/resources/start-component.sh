@@ -179,8 +179,8 @@ nnConfigsOverrides=(
     -D "dfs.namenode.safemode.threshold-pct=0.0f"
     -D "dfs.permissions.enabled=true"
     -D "dfs.cluster.administrators=\"*\""
-    -D "dfs.block.replicator.classname=org.apache.hadoop.tools.dynamometer.BlockPlacementPolicyAlwaysSatisfied"
     -D "hadoop.security.impersonation.provider.class=org.apache.hadoop.tools.dynamometer.AllowAllImpersonationProvider"
+    -D "dfs.block.replicator.classname=org.apache.hadoop.tools.dynamometer.BlockPlacementPolicyAlwaysSatisfied"
     ${configOverrides[@]}
   )
 
@@ -254,9 +254,9 @@ elif [[ "$component" = "namenode" ]]; then
   nnShareEditPort="$(find_available_port "$baseShareEditPort")"
 
   nnInfoLocalPath="$(pwd)/nn_info.prop"
-  HAConfigLocalPath="$(pwd)/HA_config.prop"
+  nnConfigLocalPath="$(pwd)/nn_config.prop"
   rm -f "$nnInfoLocalPath"
-  rm -f "$HAConfigLocalPath"
+  rm -f "$nnConfigLocalPath"
   # Port and host information to be uploaded to the non-Dynamometer HDFS
   # to be consumed by the AM and Client
   cat > "$nnInfoLocalPath" << EOF
@@ -283,31 +283,34 @@ EOF
   find "$(pwd)" -maxdepth 1 -mindepth 1 \( -name "fsimage_*" -or -name "VERSION" \) -execdir ln -snf "$(pwd)/{}" "$nameDir/current/{}" \;
   chmod 700 "$nameDir"/current/*
 
-  namenodeConfigs=(
+  namenodeStorage=(
     -D "dfs.namenode.name.dir=file://${nameDir}"
     -D "dfs.namenode.edits.dir=file://${editsDir}"
     -D "dfs.namenode.checkpoint.dir=file://${baseDir}/checkpoint"
   )
-  for i in $(eval echo "{1..$num_nameNode}");
-  do
-    ha_clusters="${ha_clusters}nn${i},";
-  done
-
+  
   if [[ $num_nameNode -gt 1 ]]; then
-    HAConfigs=( 
+    for i in $(eval echo "{1..$num_nameNode}");
+    do
+      ha_clusters="${ha_clusters}nn${i},";
+    done
+    nnConfigs=( 
+      -D "dfs.ha.automatic-failover.enabled=true"
       -D "dfs.ha.namenodes.ha-cluster=${ha_clusters}" 
       -D "dfs.namenode.rpc-address.ha-cluster.nn1=${nnHostname}:${nnRpcPort}" 
       -D "dfs.namenode.servicerpc-address.ha-cluster.nn1=${nnHostname}:${nnServiceRpcPort}" 
       -D "dfs.namenode.http-address.ha-cluster.nn1=${nnHostname}:${nnHttpPort}" 
       -D "dfs.namenode.https-address.ha-cluster.nn1=${nnHostname}:0" 
-      -D "dfs.namenode.shared.edits.dir=qjournal://${nnHostname}:${nnShareEditPort}/ha-cluster"
       -D "fs.defaultFS=hdfs://ha-cluster" 
       -D "dfs.nameservices=ha-cluster"
+      -D "dfs.client.failover.proxy.provider.ha-cluster=org.apache.hadoop.hdfs.server.namenode.ha.ConfiguredFailoverProxyProvider"
+      -D "dfs.ha.fencing.methods=sshfence"
+      -D "dfs.ha.fencing.ssh.private-key-files=/home/kevin/.ssh/id_rsa"
+      -D "ha.zookeeper.quorum=kevin1:2181,kevin2:2181,kevin3:2181"
     )
-    echo -n "${HAConfigs[@]} " > $HAConfigLocalPath
+    echo -n "${nnConfigs[@]} " > $nnConfigLocalPath
   else
-    namenodeConfigs=(
-       ${namenodeConfigs[@]}
+    nnConfigs=(
       -D "fs.defaultFS=hdfs://${nnHostname}:${nnRpcPort}"
       -D "dfs.namenode.rpc-address=${nnHostname}:${nnRpcPort}" 
       -D "dfs.namenode.servicerpc-address=${nnHostname}:${nnServiceRpcPort}" 
@@ -317,10 +320,10 @@ EOF
   fi
   if [[ $num_nameNode -gt 1 ]]; then
     echo "Using the following configs for the namenode:"
-    cat "$HAConfigLocalPath"
-    HAConfigRemotePath="$hdfsStoragePath/HA_config.prop"
-    hdfs_original dfs -copyFromLocal -f "$HAConfigLocalPath" "$HAConfigRemotePath"
-    echo "Uploaded namenode config info to $HAConfigRemotePath"
+    cat "$nnConfigLocalPath"
+    nnConfigRemotePath="$hdfsStoragePath/nn_config.prop"
+    hdfs_original dfs -copyFromLocal -f "$nnConfigLocalPath" "$nnConfigRemotePath"
+    echo "Uploaded namenode config info to $nnConfigRemotePath"
   fi
 
   echo "Using the following ports for the namenode:"
@@ -354,7 +357,7 @@ EOF
     while [ "$index" -lt $num_nameNode ];
     do
       rm -f "$nnInfoLocalPath";
-      while ! hdfs_original dfs -copyToLocal -f "$nnInfoRemotePath" "$nnInfoLocalPath" ;
+      while ! hdfs_original dfs -copyToLocal "$nnInfoRemotePath" "$nnInfoLocalPath" ;
       do
         echo "Can not copy $nnInfoRemotePath to $nnInfoLocalPath";
         sleep 1;
@@ -362,28 +365,28 @@ EOF
       lines=$(wc -l < $nnInfoLocalPath)
       index=$(($lines / 6))
     done
-    rm -f "$HAConfigLocalPath";
-    while ! hdfs_original dfs -copyToLocal -f "$HAConfigRemotePath" "$HAConfigLocalPath" ;
+    rm -f "$nnConfigLocalPath";
+    while ! hdfs_original dfs -copyToLocal "$nnConfigRemotePath" "$nnConfigLocalPath" ;
     do 
-      echo "Can not copy $HAConfigRemotePath to $HAConfigLocalPath"
+      echo "Can not copy $nnConfigRemotePath to $nnConfigLocalPath"
       sleep 1;
     done
-    HAConfigsString=`cat $HAConfigLocalPath`
-    HAConfigs=($HAConfigsString)
+    nnConfigsString=`cat $nnConfigLocalPath`
+    nnConfigs=($nnConfigsString)
   fi
-  HAConfigs=( ${HAConfigs[@]} ${nnConfigsOverrides[@]} )
-  #echo ${namenodeConfigs[@]} > $HAConfigLocalPath
-  #namenodeConfigsString=`cat $HAConfigLocalPath`
-  #namenodeConfigs=($namenodeConfigsString)
-  echo "Testing : ${HAConfigs[5]}"
+  nnConfigs=( ${nnConfigs[@]} ${nnConfigsOverrides[@]} )
   echo "Executing the following:"
-  echo "${HADOOP_HOME}/sbin/hadoop-daemon.sh start namenode" "${HAConfigs[@]}" "${namenodeConfigs[@]}"  "$NN_ADDITIONAL_ARGS"
+  echo "${HADOOP_HOME}/sbin/hadoop-daemon.sh start namenode" "${nnConfigs[@]}" "${namenodeStorage[@]}"  "$NN_ADDITIONAL_ARGS"
   # The argument splitting of NN_ADDITIONAL_ARGS is desirable behavior here
   # shellcheck disable=SC2086
-  if ! "${HADOOP_HOME}/sbin/hadoop-daemon.sh" start namenode "${HAConfigs[@]}" "${namenodeConfigs[@]}"  $NN_ADDITIONAL_ARGS; then
+  if ! "${HADOOP_HOME}/sbin/hadoop-daemon.sh" start namenode "${nnConfigs[@]}" "${namenodeStorage[@]}" $NN_ADDITIONAL_ARGS; then
     echo "Unable to launch NameNode; exiting."
     exit 1
   fi
+  echo "Start zkfc"
+  yes | "${HADOOP_HOME}/bin/hdfs" zkfc "${nnConfigs[@]}" "${namenodeStorage[@]}" -formatZK 
+  yes | "${HADOOP_HOME}/sbin/hadoop-daemon.sh" start zkfc "${nnConfigs[@]}" "${namenodeStorage[@]}"
+
   componentPIDFile="${pidDir}/hadoop-$(whoami)-${component}.pid"
   while [[ ! -f "$componentPIDFile" ]]; do sleep 1; done
   componentPID=$(cat "$componentPIDFile")
@@ -405,11 +408,11 @@ EOF
 elif [[ "$component" = "standbynamenode" ]]; then
 
   nnInfoLocalPath="$(pwd)/nn_info.prop"
-  HAConfigLocalPath="$(pwd)/HA_config.prop"
+  nnConfigLocalPath="$(pwd)/nn_config.prop"
   rm -f "$nnInfoLocalPath"
-  rm -f "$HAConfigLocalPath"
+  rm -f "$nnConfigLocalPath"
   nnInfoRemotePath="$hdfsStoragePath/nn_info.prop"
-  HAConfigRemotePath="$hdfsStoragePath/HA_config.prop"
+  nnConfigRemotePath="$hdfsStoragePath/nn_config.prop"
 
   while ! hdfs_original dfs -copyToLocal -f "$nnInfoRemotePath" "$nnInfoLocalPath" || ! hdfs_original dfs -rm  "$nnInfoRemotePath" ; 
   do
@@ -419,13 +422,13 @@ elif [[ "$component" = "standbynamenode" ]]; then
   lines=$(wc -l < $nnInfoLocalPath)
   index=$(($lines / 6 + 1))
 
-  while ! hdfs_original dfs -copyToLocal -f "$HAConfigRemotePath" "$HAConfigLocalPath" || ! hdfs_original dfs -rm  "$HAConfigRemotePath" ;
+  while ! hdfs_original dfs -copyToLocal -f "$nnConfigRemotePath" "$nnConfigLocalPath" || ! hdfs_original dfs -rm  "$nnConfigRemotePath" ;
   do
-    rm -f "$HAConfigLocalPath";
+    rm -f "$nnConfigLocalPath";
     sleep 1;
   done
-  HAConfigsString=`cat ${HAConfigLocalPath}`
-  HAConfigs=($HAConfigsString)
+  nnConfigsString=`cat $nnConfigLocalPath`
+  nnConfigs=($nnConfigsString)
 
   nnHostname="${NM_HOST}"
   nnRpcPort="$(find_available_port "$baseRpcPort")"
@@ -453,19 +456,18 @@ EOF
   find "$(pwd)" -maxdepth 1 -mindepth 1 \( -name "fsimage_*" -or -name "VERSION" \) -execdir ln -snf "$(pwd)/{}" "$nameDir/current/{}" \;
   chmod 700 "$nameDir"/current/*
 
-  namenodeConfigs=(
+  namenodeStorage=(
     -D "dfs.namenode.name.dir=file://${nameDir}"
     -D "dfs.namenode.edits.dir=file://${editsDir}"
     -D "dfs.namenode.checkpoint.dir=file://${baseDir}/checkpoint"
   )
-  HAConfigs=( 
+  nnConfigs=( 
       -D "dfs.namenode.rpc-address.ha-cluster.nn$index=${nnHostname}:${nnRpcPort}" 
       -D "dfs.namenode.servicerpc-address.ha-cluster.nn$index=${nnHostname}:${nnServiceRpcPort}" 
       -D "dfs.namenode.http-address.ha-cluster.nn$index=${nnHostname}:${nnHttpPort}" 
       -D "dfs.namenode.https-address.ha-cluster.nn$index=${nnHostname}:0" 
-      -D "dfs.namenode.shared.edits.dir=qjournal://${nnHostname}:${nnShareEditPort}/ha-cluster"
   )
-  echo -n "${HAConfigs[@]} " >> $HAConfigLocalPath
+  echo -n "${nnConfigs[@]} " >> $nnConfigLocalPath
 
   if [[ "$NN_FILE_METRIC_PERIOD" -gt 0 ]]; then
     nnMetricOutputFileLocal="$HADOOP_LOG_DIR/namenode_metrics"
@@ -485,10 +487,10 @@ EOF
   fi
 
   echo "Using the following configs for the standbynamenode:"
-  cat "$HAConfigLocalPath"
-  HAConfigRemotePath="$hdfsStoragePath/HA_config.prop"
-  hdfs_original dfs -copyFromLocal -f "$HAConfigLocalPath" "$HAConfigRemotePath"
-  echo "Uploaded namenode config info to $HAConfigRemotePath"
+  cat "$nnConfigLocalPath"
+  nnConfigRemotePath="$hdfsStoragePath/nn_config.prop"
+  hdfs_original dfs -copyFromLocal -f "$nnConfigLocalPath" "$nnConfigRemotePath"
+  echo "Uploaded namenode config info to $nnConfigRemotePath"
 
   echo "Using the following ports for the standbynamenode:"
   cat "$nnInfoLocalPath"
@@ -497,15 +499,13 @@ EOF
   hdfs_original dfs -copyFromLocal -f "$nnInfoLocalPath" "$nnInfoRemotePath"
   echo "Uploaded namenode port info to $nnInfoRemotePath"
 
-
-
   # waiting other namenodes upload configuration to $nnInfoRemotePath
   lines=$(wc -l < $nnInfoLocalPath)
   index=$(($lines / 6))
   while [ "$index" -lt $num_standbyNameNode ];
   do
     rm -f "$nnInfoLocalPath";
-    while ! hdfs_original dfs -copyToLocal -f "$nnInfoRemotePath" "$nnInfoLocalPath" ;
+    while ! hdfs_original dfs -copyToLocal "$nnInfoRemotePath" "$nnInfoLocalPath" ;
     do
       echo "Can not copy $nnInfoRemotePath to $nnInfoLocalPath";
       sleep 1;
@@ -513,25 +513,27 @@ EOF
     lines=$(wc -l < $nnInfoLocalPath)
     index=$(($lines / 6))
   done
-  rm -f "$HAConfigLocalPath";
-  while ! hdfs_original dfs -copyToLocal -f "$HAConfigRemotePath" "$HAConfigLocalPath" ;
+  rm -f "$nnConfigLocalPath";
+  while ! hdfs_original dfs -copyToLocal "$nnConfigRemotePath" "$nnConfigLocalPath" ;
   do
-    echo "Can not copy $HAConfigRemotePath to $HAConfigLocalPath"
+    echo "Can not copy $nnConfigRemotePath to $nnConfigLocalPath"
     sleep 1;
   done
-  HAConfigsString=`cat ${HAConfigLocalPath}`
-  HAConfigs=($HAConfigsString)
-
-  HAConfigs=( ${HAConfigs[@]} ${nnConfigsOverrides[@]} )
+  nnConfigsString=`cat ${nnConfigLocalPath}`
+  nnConfigs=($nnConfigsString)
+  nnConfigs=( ${nnConfigs[@]} ${nnConfigsOverrides[@]} )
 
   echo "Executing the following:"
-  echo "${HADOOP_HOME}/sbin/hadoop-daemon.sh start namenode" "${HAConfigs[@]}" "${namenodeConfigs[@]}" "$NN_ADDITIONAL_ARGS"
+  echo "${HADOOP_HOME}/sbin/hadoop-daemon.sh start namenode" "${nnConfigs[@]}" "${namenodeStorage[@]}" "$NN_ADDITIONAL_ARGS"
   # The argument splitting of NN_ADDITIONAL_ARGS is desirable behavior here
   # shellcheck disable=SC2086
-  if ! "${HADOOP_HOME}/sbin/hadoop-daemon.sh" start namenode " ${HAConfigs[@]}" "${namenodeConfigs[@]}" $NN_ADDITIONAL_ARGS; then
+  if ! "${HADOOP_HOME}/sbin/hadoop-daemon.sh" start namenode "${nnConfigs[@]}" "${namenodeStorage[@]}" $NN_ADDITIONAL_ARGS; then
     echo "Unable to launch StandbyNameNode; exiting."
     exit 1
   fi
+  sleep 5
+  echo "Start zkfc"
+  yes | "${HADOOP_HOME}/sbin/hadoop-daemon.sh" start zkfc "${nnConfigs[@]}" "${namenodeStorage[@]}"
 
   componentPIDFile="${pidDir}/hadoop-$(whoami)-${component}.pid"
   while [[ ! -f "$componentPIDFile" ]]; do sleep 1; done
@@ -567,6 +569,8 @@ function cleanup {
     kill "$metricsTailPID"
   fi
 
+  echo "Stop zkfc"
+  "${HADOOP_HOME}/sbin/hadoop-daemon.sh" stop zkfc "${nnConfigs[@]}" "${namenodeStorage[@]}"
   echo "Deleting any remaining files"
   rm -rf "$baseDir"
 }

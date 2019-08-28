@@ -82,8 +82,6 @@ import org.apache.hadoop.yarn.api.records.ContainerLaunchContext;
 import org.apache.hadoop.yarn.api.records.LocalResource;
 import org.apache.hadoop.yarn.api.records.LocalResourceType;
 import org.apache.hadoop.yarn.api.records.LocalResourceVisibility;
-import org.apache.hadoop.yarn.api.records.NodeReport;
-import org.apache.hadoop.yarn.api.records.NodeState;
 import org.apache.hadoop.yarn.api.records.QueueInfo;
 import org.apache.hadoop.yarn.api.records.Resource;
 import org.apache.hadoop.yarn.api.records.YarnApplicationState;
@@ -93,11 +91,7 @@ import org.apache.hadoop.yarn.client.api.YarnClientApplication;
 import org.apache.hadoop.yarn.conf.YarnConfiguration;
 import org.apache.hadoop.yarn.exceptions.YarnException;
 import org.apache.hadoop.yarn.util.Records;
-<<<<<<< HEAD
-=======
 import org.jline.utils.Log;
-import org.junit.Assert;
->>>>>>> Run two namenode
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -426,19 +420,6 @@ public class Client extends Configured implements Tool {
 
     yarnClient = YarnClient.createYarnClient();
     yarnClient.init(getConf());
-    List<NodeReport> nodesReport = null;
-    try {
-      nodesReport = yarnClient.getNodeReports(NodeState.RUNNING);
-    } catch (YarnException e) {
-      LOG.error("Unable to get node report");
-      e.printStackTrace();
-      return false;
-    }
-    if (nodesReport == null) {
-      Log.info("No running NodeManagers in cluster");
-    }
-    LOG.info("Total Nodes:" + nodesReport.size());
-    nodesReport.get(0).getNodeId().getHost();
 
     LOG.info("Starting with arguments: [\"{}\"]",
         Joiner.on("\" \"").join(args));
@@ -567,6 +548,20 @@ public class Client extends Configured implements Tool {
     YarnClusterMetrics clusterMetrics = yarnClient.getYarnClusterMetrics();
     LOG.info("Got Cluster metric info from ASM, numNodeManagers={}",
         clusterMetrics.getNumNodeManagers());
+
+    // List<NodeReport> nodesReport = null;
+    // try {
+    // nodesReport = yarnClient.getNodeReports(NodeState.RUNNING);
+    // } catch (YarnException e) {
+    // LOG.error("Unable to get node report");
+    // e.printStackTrace();
+    // return false;
+    // }
+    // if (nodesReport == null) {
+    // Log.info("No running NodeManagers in cluster");
+    // }
+    // LOG.info("Total Nodes:" + nodesReport.size());
+    // nodesReport.get(0).getNodeId().getHost();
 
     QueueInfo queueInfo = yarnClient.getQueueInfo(this.amQueue);
     LOG.info(
