@@ -17,16 +17,14 @@
  */
 package org.apache.hadoop.tools.dynamometer;
 
+import com.google.common.base.Preconditions;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
-
 import org.apache.commons.cli.CommandLine;
 import org.apache.commons.cli.Options;
 import org.apache.hadoop.conf.Configuration;
-
-import com.google.common.base.Preconditions;
 
 /**
  * Options supplied to the Client which are then passed through to the
@@ -178,7 +176,7 @@ final class AMOptions {
     vargs.add("--" + NAMENODE_MEMORY_MB_ARG + " " + namenodeMemoryMB);
     vargs.add("--" + NAMENODE_VCORES_ARG + " " + namenodeVirtualCores);
     vargs.add("--" + NAMENODES_PER_CLUSTER_ARG + " "
-        + String.valueOf(namenodesPerCluster));
+        + namenodesPerCluster);
     addStringValToVargs(vargs, NAMENODE_ARGS_ARG, namenodeArgs);
     addStringValToVargs(vargs, NAMENODE_NODELABEL_ARG,
         namenodeNodeLabelExpression);
@@ -186,14 +184,14 @@ final class AMOptions {
     addStringValToVargs(vargs, NAMENODE_NAME_DIR_ARG, namenodeNameDir);
     addStringValToVargs(vargs, NAMENODE_EDITS_DIR_ARG, namenodeEditsDir);
     vargs.add("--" + JOURNALNODE_MEMORY_MB_ARG + " "
-        + String.valueOf(journalnodeMemoryMB));
+        + journalnodeMemoryMB);
     vargs.add("--" + JOURNALNODE_VCORES_ARG + " "
-        + String.valueOf(journalnodeVirtualCores));
+        + journalnodeVirtualCores);
     addStringValToVargs(vargs, JOURNALNODE_ARGS_ARG, journalnodeArgs);
     addStringValToVargs(vargs, JOURNALNODE_NODELABEL_ARG,
         journalnodeNodeLabelExpression);
     vargs.add("--" + JOURNALNODES_PER_CLUSTER_ARG + " "
-        + String.valueOf(journalnodesPerCluster));
+        + journalnodesPerCluster);
     for (Map.Entry<String, String> entry : originalShellEnv.entrySet()) {
       vargs.add(
           "--" + SHELL_ENV_ARG + " " + entry.getKey() + "=" + entry.getValue());
@@ -271,7 +269,8 @@ final class AMOptions {
    * Set all of the command line options relevant to this class into the passed
    * {@link Options}.
    *
-   * @param opts Where to set the command line options.
+   * @param opts
+   *          Where to set the command line options.
    */
   static void setOptions(Options opts) {
     opts.addOption(SHELL_ENV_ARG, true,
@@ -345,7 +344,8 @@ final class AMOptions {
   /**
    * Initialize an {@code AMOptions} from a command line parser.
    *
-   * @param cliParser Where to initialize from.
+   * @param cliParser
+   *          Where to initialize from.
    * @return A new {@code AMOptions} filled out with options from the parser.
    */
   static AMOptions initFromParser(CommandLine cliParser) {

@@ -98,6 +98,8 @@ public final class DynoConstants {
   // (within the remote storage directory)
   public static final String NN_INFO_FILE_NAME = "nn_info.prop";
 
+  public static final String JN_CONFIG_FILE_NAME = "jn_config.prop";
+
   // Environment variable which will contain additional arguments for the
   // NameNode
   public static final String NN_ADDITIONAL_ARGS_ENV = "NN_ADDITIONAL_ARGS";
@@ -142,4 +144,8 @@ public final class DynoConstants {
   public static final String DATANODE = "datanode";
 
   public static final String JOURNALNODE = "journalnode";
+
+  public static final String NAMENODESERVICES = "DFS_NAMESERVICES";
+
+  public static final String NAMENODE_INDEX_DEFAULT = "1";
 }

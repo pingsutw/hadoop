@@ -17,6 +17,9 @@
  */
 package org.apache.hadoop.tools.dynamometer;
 
+import com.google.common.base.Joiner;
+import com.google.common.collect.Lists;
+import com.google.common.primitives.Ints;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
@@ -31,8 +34,8 @@ import java.util.Random;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.function.Supplier;
 
+import java.util.function.Supplier;
 import org.apache.commons.cli.CommandLine;
 import org.apache.commons.cli.GnuParser;
 import org.apache.commons.cli.HelpFormatter;
@@ -80,23 +83,21 @@ import org.apache.hadoop.yarn.util.Records;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import com.google.common.base.Joiner;
-import com.google.common.collect.Lists;
-import com.google.common.primitives.Ints;
 
 /**
  * The ApplicationMaster for Dynamometer. This will launch DataNodes in YARN
  * containers. If the RPC address of a NameNode is specified, it will configure
  * the DataNodes to talk to that NameNode. Else, a NameNode will be launched as
  * part of this YARN application. This does not implement any retry/failure
- * handling. TODO: Add proper retry/failure handling
+ * handling.
+ * TODO: Add proper retry/failure handling
  * <p>
  * The AM will persist until it has run for a period of time equal to the
  * timeout specified or until the application is killed.
  * <p>
- * If the NameNode is launched internally, it will upload some information onto
- * the remote HDFS instance (i.e., the default FileSystem) about its hostname
- * and ports. This is in the location determined by the
+ * If the NameNode is launched internally, it will upload some information
+ * onto the remote HDFS instance (i.e., the default FileSystem) about its
+ * hostname and ports. This is in the location determined by the
  * {@link DynoConstants#DYNAMOMETER_STORAGE_DIR} and
  * {@link DynoConstants#NN_INFO_FILE_NAME} constants and is in the
  * {@link Properties} file format. This is consumed by this AM as well as the
@@ -272,12 +273,14 @@ public class ApplicationMaster {
         new Path(envs.get(DynoConstants.REMOTE_STORAGE_PATH_ENV));
     try {
       Configuration config = new Configuration();
-      Path tmp = new Path(remoteStoragePath, "test.txt");
-      FileSystem fs = tmp.getFileSystem(config);
-      FSDataOutputStream fout = fs.create(tmp);
+      FileSystem fs = remoteStoragePath.getFileSystem(config);
+
+      Path journalNodeInfoPath = new Path(remoteStoragePath, "jn_config.prop");
+      FSDataOutputStream fout = fs.create(journalNodeInfoPath);
+      fout.close();
     } catch (IOException e) {
-      // TODO Auto-generated catch block
-      e.printStackTrace();
+      LOG.error("Can not create jn_info.prop at " + namenodeInfoPath + ": {}",
+          e.getMessage());
     }
 
     applicationAcls = new HashMap<>();
@@ -302,8 +305,8 @@ public class ApplicationMaster {
 
     if (envs.containsKey(DynoConstants.REMOTE_NN_RPC_ADDR_ENV)) {
       launchNameNode = false;
-      namenodeServiceRpcAddress =
-          envs.get(DynoConstants.REMOTE_NN_RPC_ADDR_ENV);
+      namenodeServiceRpcAddress = envs
+          .get(DynoConstants.REMOTE_NN_RPC_ADDR_ENV);
     } else {
       launchNameNode = true;
       // namenodeServiceRpcAddress will be set in run() once properties are
@@ -313,10 +316,8 @@ public class ApplicationMaster {
     ContainerId containerId =
         ContainerId.fromString(envs.get(Environment.CONTAINER_ID.name()));
     ApplicationAttemptId appAttemptID = containerId.getApplicationAttemptId();
-    LOG.info(
-        "Application master for app: appId={}, clusterTimestamp={}, "
-            + "attemptId={}",
-        appAttemptID.getApplicationId().getId(),
+    LOG.info("Application master for app: appId={}, clusterTimestamp={}, "
+        + "attemptId={}", appAttemptID.getApplicationId().getId(),
         appAttemptID.getApplicationId().getClusterTimestamp(),
         appAttemptID.getAttemptId());
 
@@ -344,13 +345,13 @@ public class ApplicationMaster {
   public boolean run() throws YarnException, IOException, InterruptedException {
     LOG.info("Starting ApplicationMaster");
 
-    Credentials credentials =
-        UserGroupInformation.getCurrentUser().getCredentials();
+    Credentials credentials = UserGroupInformation.getCurrentUser()
+        .getCredentials();
     DataOutputBuffer dob = new DataOutputBuffer();
     credentials.writeTokenStorageToStream(dob);
     // Now remove the AM->RM token so that containers cannot access it.
-    credentials.getAllTokens().removeIf(
-        (token) -> token.getKind().equals(AMRMTokenIdentifier.KIND_NAME));
+    credentials.getAllTokens().removeIf((token) ->
+            token.getKind().equals(AMRMTokenIdentifier.KIND_NAME));
     allTokens = ByteBuffer.wrap(dob.getData(), 0, dob.getLength());
 
     AMRMClientAsync.AbstractCallbackHandler allocListener =
@@ -373,6 +374,7 @@ public class ApplicationMaster {
     Supplier<Boolean> exitCritera = this::isComplete;
 
     Optional<Properties> namenodeProperties = Optional.empty();
+    Optional<Properties> journalnodeProperties = Optional.empty();
 
     if (launchNameNode) {
       // Start JournalNodes first if HA enable
@@ -383,6 +385,22 @@ public class ApplicationMaster {
                 amOptions.getJournalNodeLabelExpression());
         LOG.info("Requested JournalNode ask: " + jnContainerRequest.toString());
         amRMClient.addContainerRequest(jnContainerRequest);
+      }
+      // Wait for the JN container to make its information available on the
+      // shared remote file storage
+
+      if (numTotalJournalNodeContainers > 0) {
+        Path journalnodeInfoPath =
+            new Path(remoteStoragePath, DynoConstants.JN_CONFIG_FILE_NAME);
+        LOG.info("Waiting on availability of JournalNode information at "
+            + journalnodeInfoPath);
+        journalnodeProperties =
+            DynoInfraUtils.waitForAndGetJournalNodeProperties(exitCritera, conf,
+                journalnodeInfoPath, LOG);
+        if (!journalnodeProperties.isPresent()) {
+          cleanup();
+          return false;
+        }
       }
       // Start NameNode
       ContainerRequest nnContainerRequest = setupContainerAskForRM(
@@ -404,22 +422,34 @@ public class ApplicationMaster {
       // Wait for the NN container to make its information available on the
       // shared
       // remote file storage
-      Path namenodeInfoPath =
-          new Path(remoteStoragePath, DynoConstants.NN_INFO_FILE_NAME);
+      Path namenodeInfoPath = new Path(remoteStoragePath,
+          DynoConstants.NN_INFO_FILE_NAME);
       LOG.info("Waiting on availability of NameNode information at "
           + namenodeInfoPath);
 
-      namenodeProperties = DynoInfraUtils.waitForAndGetNameNodeProperties(
-          exitCritera, conf, namenodeInfoPath, LOG);
+      namenodeProperties =
+          DynoInfraUtils.waitForAndGetNameNodeProperties(exitCritera, conf,
+              namenodeInfoPath, LOG, numTotalStandbyNameNodes + 1);
       if (!namenodeProperties.isPresent()) {
         cleanup();
         return false;
       }
-      namenodeServiceRpcAddress = DynoInfraUtils
-          .getNameNodeServiceRpcAddr(namenodeProperties.get()).toString();
+      for (int i = 1; i <= numTotalStandbyNameNodes + 1; i++) {
+        LOG.info("NameNode can be reached at: " + DynoInfraUtils
+            .getNameNodeHdfsUri(namenodeProperties.get(), String.valueOf(i))
+            .toString());
+      }
       LOG.info("NameNode information: " + namenodeProperties.get());
-      LOG.info("NameNode can be reached at: " + DynoInfraUtils
-          .getNameNodeHdfsUri(namenodeProperties.get()).toString());
+
+      if (numTotalStandbyNameNodes > 0) {
+        // Get nameNodeNameSpace if HA enable
+        namenodeServiceRpcAddress = DynoInfraUtils
+            .getNameNodeNamespace(namenodeProperties.get()).toString();
+      } else {
+        namenodeServiceRpcAddress =
+            DynoInfraUtils.getNameNodeServiceRpcAddr(namenodeProperties.get(),
+                DynoConstants.NAMENODE_INDEX_DEFAULT).toString();
+      }
       DynoInfraUtils.waitForNameNodeStartup(namenodeProperties.get(),
           exitCritera, LOG);
     } else {
@@ -427,8 +457,8 @@ public class ApplicationMaster {
           + namenodeServiceRpcAddress);
     }
 
-    blockListFiles =
-        Collections.synchronizedList(getDataNodeBlockListingFiles());
+    blockListFiles = Collections
+        .synchronizedList(getDataNodeBlockListingFiles());
     numTotalDataNodes = blockListFiles.size();
     if (numTotalDataNodes == 0) {
       LOG.error(
@@ -531,13 +561,13 @@ public class ApplicationMaster {
       appStatus = FinalApplicationStatus.FAILED;
       appMessage = "Diagnostics: total=" + numTotalDataNodeContainers
           + ", completed=" + numCompletedDataNodeContainers.get()
-          + ", allocated=" + numAllocatedDataNodeContainers.get() + ", failed="
-          + numFailedDataNodeContainers.get();
+          + ", allocated=" + numAllocatedDataNodeContainers.get()
+          + ", failed=" + numFailedDataNodeContainers.get();
       success = false;
     }
     try {
       amRMClient.unregisterApplicationMaster(appStatus, appMessage, null);
-    } catch (YarnException | IOException ex) {
+    } catch (YarnException|IOException ex) {
       LOG.error("Failed to unregister application", ex);
     }
 
@@ -561,13 +591,13 @@ public class ApplicationMaster {
             + StringUtils.abbreviate(containerStatus.getDiagnostics(), 1000);
         String component;
         if (isNameNode(containerStatus.getContainerId())) {
-          component = "namenode";
+          component = "NAMENODE";
         } else if (isStandbyNameNode(containerStatus.getContainerId())) {
-          component = "standbynamenode";
+          component = "STANDBYNAMENODE";
         } else if (isJournalNode(containerStatus.getContainerId())) {
-          component = "journalnode";
+          component = "JOURNALNODE";
         } else if (isDataNode(containerStatus.getContainerId())) {
-          component = "datanode";
+          component = "DATANODE";
         } else {
           LOG.error("Received container status for unknown container: "
               + containerInfo);
@@ -579,17 +609,16 @@ public class ApplicationMaster {
         // non complete containers should not be here
         assert (containerStatus.getState() == ContainerState.COMPLETE);
 
-        if (component.equals("namenode")) {
+        if (component.equals("NAMENODE")) {
           LOG.info("NameNode container completed; marking application as done");
-          markCompleted();
         }
 
         // increment counters for completed/failed containers
-        if (component.equals("journalnode")) {
+        if (component.equals("JOURNALNODE")) {
           countCompleteContainers(numCompletedJournalNodeContainers,
               numFailedJournalNodeContainers, numTotalJournalNodeContainers,
               exitStatus, component);
-        } else if (component.equals("standbynamenode")) {
+        } else if (component.equals("STANDBYNAMENODE")) {
           countCompleteContainers(numCompletedStandbyNameNodeContainers,
               numFailedStandbyNameNodeContainers,
               numTotalStandbyNameNodeContainers, exitStatus, component);
@@ -872,7 +901,7 @@ public class ApplicationMaster {
 
     /**
      * @param lcontainer Allocated container
-     * @param isNameNode True iff this should launch a NameNode
+     * @param component what component will be launched
      */
     LaunchContainerRunnable(Container lcontainer, String component) {
       this.container = lcontainer;
@@ -895,12 +924,12 @@ public class ApplicationMaster {
       addAsLocalResourceFromEnv(DynoConstants.DYNO_DEPENDENCIES, localResources,
           envs);
       LOG.info("component = {}", component);
-      if (component == DynoConstants.NAMENODE
-          || component == DynoConstants.STANDBYNAMENODE) {
+      if (component.equals(DynoConstants.NAMENODE)
+          || component.equals(DynoConstants.STANDBYNAMENODE)) {
         addAsLocalResourceFromEnv(DynoConstants.FS_IMAGE, localResources, envs);
         addAsLocalResourceFromEnv(DynoConstants.FS_IMAGE_MD5, localResources,
             envs);
-      } else {
+      } else if (component.equals(DynoConstants.DATANODE)) {
         int blockFilesToLocalize =
             Math.max(1, amOptions.getDataNodesPerCluster());
         for (int i = 0; i < blockFilesToLocalize; i++) {
@@ -933,6 +962,7 @@ public class ApplicationMaster {
 
       try {
         ctx.setLocalResources(getLocalResources());
+
         ctx.setCommands(getContainerStartCommand());
       } catch (IOException e) {
         LOG.error("Error while configuring container!", e);
@@ -958,12 +988,12 @@ public class ApplicationMaster {
       // Set executable command
       vargs.add("./" + DynoConstants.START_SCRIPT.getResourcePath());
       vargs.add(this.component);
-      if (component == DynoConstants.NAMENODE
-          || component == DynoConstants.STANDBYNAMENODE) {
+      if (component.equals(DynoConstants.NAMENODE)
+          || component.equals(DynoConstants.STANDBYNAMENODE)) {
         vargs.add(remoteStoragePath.getFileSystem(conf)
             .makeQualified(remoteStoragePath).toString());
         vargs.add(String.valueOf(numTotalStandbyNameNodes + 1));
-      } else if (component == DynoConstants.JOURNALNODE) {
+      } else if (component.equals(DynoConstants.JOURNALNODE)) {
         vargs.add(remoteStoragePath.getFileSystem(conf)
             .makeQualified(remoteStoragePath).toString());
         vargs.add(String.valueOf(numTotalJournalNodes));
@@ -972,6 +1002,8 @@ public class ApplicationMaster {
         vargs.add(String.valueOf(amOptions.getDataNodeLaunchDelaySec() < 1 ? 0
             : RAND.nextInt(
                 Ints.checkedCast(amOptions.getDataNodeLaunchDelaySec()))));
+        vargs.add(remoteStoragePath.getFileSystem(conf)
+            .makeQualified(remoteStoragePath).toString());
       }
 
       // Add log redirect params
@@ -1007,17 +1039,17 @@ public class ApplicationMaster {
 
   private List<LocalResource> getDataNodeBlockListingFiles()
       throws IOException {
-    Path blockListDirPath =
-        new Path(System.getenv().get(DynoConstants.BLOCK_LIST_PATH_ENV));
+    Path blockListDirPath = new Path(
+        System.getenv().get(DynoConstants.BLOCK_LIST_PATH_ENV));
     LOG.info("Looking for block listing files in " + blockListDirPath);
     FileSystem blockZipFS = blockListDirPath.getFileSystem(conf);
     List<LocalResource> files = new LinkedList<>();
     for (FileStatus stat : blockZipFS.listStatus(blockListDirPath,
         DynoConstants.BLOCK_LIST_FILE_FILTER)) {
-      LocalResource blockListResource =
-          LocalResource.newInstance(URL.fromPath(stat.getPath()),
-              LocalResourceType.FILE, LocalResourceVisibility.APPLICATION,
-              stat.getLen(), stat.getModificationTime());
+      LocalResource blockListResource = LocalResource.newInstance(
+          URL.fromPath(stat.getPath()),
+          LocalResourceType.FILE, LocalResourceVisibility.APPLICATION,
+          stat.getLen(), stat.getModificationTime());
       files.add(blockListResource);
     }
     return files;

@@ -17,6 +17,16 @@
  */
 package org.apache.hadoop.tools.dynamometer;
 
+import com.google.common.annotations.VisibleForTesting;
+import com.google.common.base.Joiner;
+import com.google.common.base.Preconditions;
+import com.google.common.base.Splitter;
+import com.google.common.collect.Lists;
+import java.util.Optional;
+import java.util.function.Supplier;
+import org.apache.hadoop.tools.dynamometer.workloadgenerator.audit.AuditReplayMapper;
+import org.apache.hadoop.tools.dynamometer.workloadgenerator.WorkloadDriver;
+
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
@@ -34,11 +44,9 @@ import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.Properties;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
-import java.util.function.Supplier;
 import java.util.stream.Collectors;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
@@ -66,8 +74,6 @@ import org.apache.hadoop.mapreduce.MRJobConfig;
 import org.apache.hadoop.security.Credentials;
 import org.apache.hadoop.security.UserGroupInformation;
 import org.apache.hadoop.security.token.Token;
-import org.apache.hadoop.tools.dynamometer.workloadgenerator.WorkloadDriver;
-import org.apache.hadoop.tools.dynamometer.workloadgenerator.audit.AuditReplayMapper;
 import org.apache.hadoop.util.ClassUtil;
 import org.apache.hadoop.util.Tool;
 import org.apache.hadoop.util.ToolRunner;
@@ -91,15 +97,9 @@ import org.apache.hadoop.yarn.client.api.YarnClientApplication;
 import org.apache.hadoop.yarn.conf.YarnConfiguration;
 import org.apache.hadoop.yarn.exceptions.YarnException;
 import org.apache.hadoop.yarn.util.Records;
-import org.jline.utils.Log;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import com.google.common.annotations.VisibleForTesting;
-import com.google.common.base.Joiner;
-import com.google.common.base.Preconditions;
-import com.google.common.base.Splitter;
-import com.google.common.collect.Lists;
 
 /**
  * Client for submitting a Dynamometer YARN application, and optionally, a
@@ -108,12 +108,13 @@ import com.google.common.collect.Lists;
  * {@link ApplicationMaster}, which is responsible for managing the lifetime of
  * the application.
  * <p>
- * The Dynamometer YARN application starts up the DataNodes of an HDFS cluster.
- * If the namenode_servicerpc_addr option is specified, it should point to the
- * service RPC address of an existing namenode, which the datanodes will talk
- * to. Else, a namenode will be launched internal to this YARN application. The
- * ApplicationMaster's logs contain links to the NN / DN containers to be able
- * to access their logs. Some of this information is also printed by the client.
+ * The Dynamometer YARN application starts up the DataNodes of an HDFS
+ * cluster. If the namenode_servicerpc_addr option is specified, it should point
+ * to the service RPC address of an existing namenode, which the datanodes will
+ * talk to. Else, a namenode will be launched internal to this YARN application.
+ * The ApplicationMaster's logs contain links to the NN / DN containers to be
+ * able to access their logs. Some of this information is also printed by the
+ * client.
  * <p>
  * The application will store files in the submitting user's home directory
  * under a `.dynamometer/applicationID/` folder. This is mostly for uses
@@ -123,20 +124,20 @@ import com.google.common.collect.Lists;
  * logs, but this centralized location is easier to access for subsequent
  * parsing.
  * <p>
- * If the NameNode is launched internally, this Client will monitor the status
- * of the NameNode, printing information about its availability as the DataNodes
- * register (e.g., outstanding under replicated blocks as block reports arrive).
- * If this is configured to launch the workload job, once the NameNode has
- * gathered information from all of its DataNodes, the client will launch a
- * workload job which is configured to act against the newly launched NameNode.
- * Once the workload job completes, the infrastructure application will be shut
- * down. At this time only the audit log replay ({@link AuditReplayMapper})
- * workload is supported.
+ * If the NameNode is launched internally, this Client will monitor the
+ * status of the NameNode, printing information about its availability as the
+ * DataNodes register (e.g., outstanding under replicated blocks as block
+ * reports arrive). If this is configured to launch the workload job, once the
+ * NameNode has gathered information from all of its DataNodes, the client will
+ * launch a workload job which is configured to act against the newly launched
+ * NameNode. Once the workload job completes, the infrastructure application
+ * will be shut down. At this time only the audit log replay
+ * ({@link AuditReplayMapper}) workload is supported.
  * <p>
- * If there is no workload job configured, this application will, by default,
- * persist indefinitely until killed by YARN. You can specify the timeout option
- * to have it exit automatically after some time. This timeout will enforced if
- * there is a workload job configured as well.
+ * If there is no workload job configured, this application will, by
+ * default, persist indefinitely until killed by YARN. You can specify the
+ * timeout option to have it exit automatically after some time. This timeout
+ * will enforced if there is a workload job configured as well.
  */
 @InterfaceAudience.Public
 @InterfaceStability.Unstable
@@ -176,11 +177,11 @@ public class Client extends Configured implements Tool {
   public static final String NUMTOTALJOURNALNODES_DEFAULT = "3";
 
   private static final String[] ARCHIVE_FILE_TYPES =
-      { ".zip", ".tar", ".tgz", ".tar.gz" };
+      {".zip", ".tar", ".tgz", ".tar.gz"};
 
-  private static final String START_SCRIPT_LOCATION =
-      Client.class.getClassLoader()
-          .getResource(DynoConstants.START_SCRIPT.getResourcePath()).toString();
+  private static final String START_SCRIPT_LOCATION = Client.class
+      .getClassLoader()
+      .getResource(DynoConstants.START_SCRIPT.getResourcePath()).toString();
 
   private YarnClient yarnClient;
   // Application master specific info to register a new Application with RM/ASM
@@ -301,7 +302,7 @@ public class Client extends Configured implements Tool {
         "Number of Namenodes to be launched (default '("
             + NUMTOTALNAMENODES_DEFAULT + "')");
     opts.addOption(DynoConstants.NUMTOTALJOURNALNODES, true,
-        "Number of Namenodes to be launched (default '("
+        "Number of Journalnodes to be launched (default '("
             + NUMTOTALJOURNALNODES_DEFAULT + "')");
     opts.addOption(APPNAME_ARG, true,
         "Application Name. (default '" + APPNAME_DEFAULT + "')");
@@ -309,14 +310,12 @@ public class Client extends Configured implements Tool {
         + "to be submitted (default '" + QUEUE_DEFAULT + "')");
     opts.addOption(TIMEOUT_ARG, true, "Application timeout in milliseconds "
         + "(default " + TIMEOUT_DEFAULT + " = unlimited)");
-    opts.addOption(MASTER_MEMORY_MB_ARG, true,
-        "Amount of memory in MB to be "
-            + "requested to run the application master (default "
-            + MASTER_MEMORY_MB_DEFAULT + ")");
-    opts.addOption(MASTER_VCORES_ARG, true,
-        "Amount of virtual cores to be "
-            + "requested to run the application master (default "
-            + MASTER_VCORES_DEFAULT + ")");
+    opts.addOption(MASTER_MEMORY_MB_ARG, true, "Amount of memory in MB to be "
+        + "requested to run the application master (default "
+        + MASTER_MEMORY_MB_DEFAULT + ")");
+    opts.addOption(MASTER_VCORES_ARG, true, "Amount of virtual cores to be "
+        + "requested to run the application master (default "
+        + MASTER_VCORES_DEFAULT + ")");
     // Dynamometer
     opts.addOption(CONF_PATH_ARG, true, "Location of the directory or archive "
         + "containing the Hadoop configuration. If this is already on a "
@@ -325,14 +324,13 @@ public class Client extends Configured implements Tool {
         + "etc/hadoop/*-site.xml");
     opts.addOption(BLOCK_LIST_PATH_ARG, true,
         "Location on HDFS of the files containing the DN block lists.");
-    opts.addOption(FS_IMAGE_DIR_ARG, true,
-        "Location of the directory "
-            + "containing, at minimum, the VERSION file for the namenode. If "
-            + "running the namenode within YARN (namenode_info_path is not "
-            + "specified), this must also include the fsimage file and its md5 "
-            + "hash with names conforming to: `fsimage_XXXXXXXX[.md5]`.");
-    for (String option : new String[] { CONF_PATH_ARG, BLOCK_LIST_PATH_ARG,
-        FS_IMAGE_DIR_ARG }) {
+    opts.addOption(FS_IMAGE_DIR_ARG, true, "Location of the directory "
+        + "containing, at minimum, the VERSION file for the namenode. If "
+        + "running the namenode within YARN (namenode_info_path is not "
+        + "specified), this must also include the fsimage file and its md5 "
+        + "hash with names conforming to: `fsimage_XXXXXXXX[.md5]`.");
+    for (String option :
+        new String[] {CONF_PATH_ARG, BLOCK_LIST_PATH_ARG, FS_IMAGE_DIR_ARG}) {
       opts.getOption(option).setRequired(true);
     }
     OptionGroup hadoopBinaryGroup = new OptionGroup();
@@ -350,15 +348,13 @@ public class Client extends Configured implements Tool {
             + "directory. One of this or hadoop_binary_path is required."));
     hadoopBinaryGroup.setRequired(true);
     opts.addOptionGroup(hadoopBinaryGroup);
-    opts.addOption(NAMENODE_SERVICERPC_ADDR_ARG, true,
-        "Specify this option "
-            + "to run the NameNode external to YARN. This is the service RPC "
-            + "address of the NameNode, e.g. localhost:9020.");
-    opts.addOption(TOKEN_FILE_LOCATION_ARG, true,
-        "If specified, this file "
-            + "will be used as the delegation token(s) for the launched "
-            + "containers. Otherwise, the delegation token(s) for the default "
-            + "FileSystem will be used.");
+    opts.addOption(NAMENODE_SERVICERPC_ADDR_ARG, true, "Specify this option "
+        + "to run the NameNode external to YARN. This is the service RPC "
+        + "address of the NameNode, e.g. localhost:9020.");
+    opts.addOption(TOKEN_FILE_LOCATION_ARG, true, "If specified, this file "
+        + "will be used as the delegation token(s) for the launched "
+        + "containers. Otherwise, the delegation token(s) for the default "
+        + "FileSystem will be used.");
     AMOptions.setOptions(opts);
 
     opts.addOption(WORKLOAD_REPLAY_ENABLE_ARG, false, "If specified, this "
@@ -381,12 +377,11 @@ public class Client extends Configured implements Tool {
     opts.addOption(WORKLOAD_RATE_FACTOR_ARG, true, "Rate factor "
         + "(multiplicative speed factor) to apply to workload replay (Default "
         + WORKLOAD_RATE_FACTOR_DEFAULT + ")");
-    opts.addOption(WORKLOAD_CONFIG_ARG, true,
-        "Additional configurations to "
-            + "pass only to the workload job. This can be used multiple times "
-            + "and should be specified as a key=value pair, e.g. '-"
-            + WORKLOAD_CONFIG_ARG + " conf.one=val1 -" + WORKLOAD_CONFIG_ARG
-            + " conf.two=val2'");
+    opts.addOption(WORKLOAD_CONFIG_ARG, true, "Additional configurations to "
+        + "pass only to the workload job. This can be used multiple times "
+        + "and should be specified as a key=value pair, e.g. '-"
+        + WORKLOAD_CONFIG_ARG + " conf.one=val1 -" + WORKLOAD_CONFIG_ARG
+        + " conf.two=val2'");
   }
 
   /**
@@ -423,11 +418,11 @@ public class Client extends Configured implements Tool {
 
     LOG.info("Starting with arguments: [\"{}\"]",
         Joiner.on("\" \"").join(args));
-    numTotalNameNodes = Integer.parseInt(cliParser.getOptionValue(
+    numTotalNameNodes = Integer.parseInt(commandLine.getOptionValue(
         DynoConstants.NUMTOTALNAMENODES, NUMTOTALNAMENODES_DEFAULT));
 
     if (numTotalNameNodes > 1) {
-      numTotalJournalNodes = Integer.parseInt(cliParser.getOptionValue(
+      numTotalJournalNodes = Integer.parseInt(commandLine.getOptionValue(
           DynoConstants.NUMTOTALJOURNALNODES, NUMTOTALJOURNALNODES_DEFAULT));
     } else {
       numTotalJournalNodes = 0;
@@ -526,8 +521,8 @@ public class Client extends Configured implements Tool {
       // Store a temporary config to leverage Configuration's time duration
       // parsing.
       getConf().set("___temp___", delayString);
-      workloadStartDelayMs =
-          getConf().getTimeDuration("___temp___", 0, TimeUnit.MILLISECONDS);
+      workloadStartDelayMs = getConf().getTimeDuration("___temp___", 0,
+          TimeUnit.MILLISECONDS);
     }
 
     return true;
@@ -549,36 +544,20 @@ public class Client extends Configured implements Tool {
     LOG.info("Got Cluster metric info from ASM, numNodeManagers={}",
         clusterMetrics.getNumNodeManagers());
 
-    // List<NodeReport> nodesReport = null;
-    // try {
-    // nodesReport = yarnClient.getNodeReports(NodeState.RUNNING);
-    // } catch (YarnException e) {
-    // LOG.error("Unable to get node report");
-    // e.printStackTrace();
-    // return false;
-    // }
-    // if (nodesReport == null) {
-    // Log.info("No running NodeManagers in cluster");
-    // }
-    // LOG.info("Total Nodes:" + nodesReport.size());
-    // nodesReport.get(0).getNodeId().getHost();
-
     QueueInfo queueInfo = yarnClient.getQueueInfo(this.amQueue);
-    LOG.info(
-        "Queue info: queueName={}, queueCurrentCapacity={}, "
-            + "queueMaxCapacity={}, queueApplicationCount={}, "
-            + "queueChildQueueCount={}",
-        queueInfo.getQueueName(), queueInfo.getCurrentCapacity(),
-        queueInfo.getMaximumCapacity(), queueInfo.getApplications().size(),
-        queueInfo.getChildQueues().size());
+    LOG.info("Queue info: queueName={}, queueCurrentCapacity={}, "
+        + "queueMaxCapacity={}, queueApplicationCount={}, "
+        + "queueChildQueueCount={}", queueInfo.getQueueName(),
+        queueInfo.getCurrentCapacity(), queueInfo.getMaximumCapacity(),
+        queueInfo.getApplications().size(), queueInfo.getChildQueues().size());
 
     // Get a new application id
     YarnClientApplication app = yarnClient.createApplication();
     GetNewApplicationResponse appResponse = app.getNewApplicationResponse();
     long maxMem = appResponse.getMaximumResourceCapability().getMemorySize();
     LOG.info("Max mem capabililty of resources in this cluster " + maxMem);
-    int maxVCores =
-        appResponse.getMaximumResourceCapability().getVirtualCores();
+    int maxVCores = appResponse.getMaximumResourceCapability()
+        .getVirtualCores();
     LOG.info("Max virtual cores capabililty of resources in this cluster {}",
         maxVCores);
     if (amMemory > maxMem || amMemory < 0 || amVCores > maxVCores
@@ -595,8 +574,8 @@ public class Client extends Configured implements Tool {
     appContext.setApplicationName(appName);
 
     // Set up the container launch context for the application master
-    ContainerLaunchContext amContainer =
-        Records.newRecord(ContainerLaunchContext.class);
+    ContainerLaunchContext amContainer = Records
+        .newRecord(ContainerLaunchContext.class);
     Map<ApplicationAccessType, String> acls = new HashMap<>();
     acls.put(ApplicationAccessType.VIEW_APP, getConf().get(
         MRJobConfig.JOB_ACL_VIEW_JOB, MRJobConfig.DEFAULT_JOB_ACL_VIEW_JOB));
@@ -640,8 +619,8 @@ public class Client extends Configured implements Tool {
     if (UserGroupInformation.isSecurityEnabled()) {
       ByteBuffer fsTokens;
       if (tokenFileLocation != null) {
-        fsTokens =
-            ByteBuffer.wrap(Files.readAllBytes(Paths.get(tokenFileLocation)));
+        fsTokens = ByteBuffer
+            .wrap(Files.readAllBytes(Paths.get(tokenFileLocation)));
       } else {
         Credentials credentials = new Credentials();
         String tokenRenewer = getConf().get(YarnConfiguration.RM_PRINCIPAL);
@@ -651,8 +630,8 @@ public class Client extends Configured implements Tool {
         }
 
         // For now, only getting tokens for the default file-system.
-        final Token<?>[] tokens =
-            fs.addDelegationTokens(tokenRenewer, credentials);
+        final Token<?>[] tokens = fs.addDelegationTokens(tokenRenewer,
+            credentials);
         if (tokens != null) {
           for (Token<?> token : tokens) {
             LOG.info("Got dt for " + fs.getUri() + "; " + token);
@@ -791,10 +770,10 @@ public class Client extends Configured implements Tool {
         resource.getType() == LocalResourceType.ARCHIVE || srcPaths.length == 1,
         "Can only specify multiple source paths if using an ARCHIVE type");
 
-    List<URI> srcURIs =
-        Arrays.stream(srcPaths).map(URI::create).collect(Collectors.toList());
-    Set<String> srcSchemes =
-        srcURIs.stream().map(URI::getScheme).collect(Collectors.toSet());
+    List<URI> srcURIs = Arrays.stream(srcPaths).map(URI::create)
+        .collect(Collectors.toList());
+    Set<String> srcSchemes = srcURIs.stream().map(URI::getScheme)
+        .collect(Collectors.toSet());
     Preconditions.checkArgument(srcSchemes.size() == 1,
         "All source paths must have the same scheme");
     String srcScheme = srcSchemes.iterator().next();
@@ -808,15 +787,14 @@ public class Client extends Configured implements Tool {
       List<File> srcFiles = srcURIs.stream().map(URI::getSchemeSpecificPart)
           .map(File::new).collect(Collectors.toList());
       Path dstPathBase = getRemoteStoragePath(getConf(), appId);
-      boolean shouldArchive =
-          srcFiles.size() > 1 || srcFiles.get(0).isDirectory()
-              || (resource.getType() == LocalResourceType.ARCHIVE
-                  && Arrays.stream(ARCHIVE_FILE_TYPES).noneMatch(
-                      suffix -> srcFiles.get(0).getName().endsWith(suffix)));
+      boolean shouldArchive = srcFiles.size() > 1
+          || srcFiles.get(0).isDirectory()
+          || (resource.getType() == LocalResourceType.ARCHIVE
+              && Arrays.stream(ARCHIVE_FILE_TYPES).noneMatch(
+                  suffix -> srcFiles.get(0).getName().endsWith(suffix)));
       if (shouldArchive) {
         if ("jar".equals(srcScheme)) {
-          throw new IllegalArgumentException(String.format(
-              "Resources in JARs "
+          throw new IllegalArgumentException(String.format("Resources in JARs "
                   + "can't be zipped; resource %s is ARCHIVE and src is: %s",
               resource.getResourcePath(), srcPathString));
         } else if (resource.getType() != LocalResourceType.ARCHIVE) {
@@ -824,8 +802,8 @@ public class Client extends Configured implements Tool {
               String.format("Resource type is %s but srcPaths were: %s",
                   resource.getType(), srcPathString));
         }
-        dstPath =
-            new Path(dstPathBase, resource.getResourcePath()).suffix(".zip");
+        dstPath = new Path(dstPathBase, resource.getResourcePath())
+            .suffix(".zip");
       } else {
         dstPath = new Path(dstPathBase, srcFiles.get(0).getName());
       }
@@ -866,12 +844,12 @@ public class Client extends Configured implements Tool {
         throw new IllegalArgumentException("If resource is on remote, must be "
             + "a single file: " + srcPathString);
       }
-      LOG.info("Using resource {} directly from current location: {}", resource,
-          srcPaths[0]);
+      LOG.info("Using resource {} directly from current location: {}",
+          resource, srcPaths[0]);
       dstPath = new Path(srcPaths[0]);
       // non-local file system; we can just use it directly from where it is
-      remoteFileStatus =
-          FileSystem.get(dstPath.toUri(), getConf()).getFileStatus(dstPath);
+      remoteFileStatus = FileSystem.get(dstPath.toUri(), getConf())
+          .getFileStatus(dstPath);
       if (remoteFileStatus.isDirectory()) {
         throw new IllegalArgumentException("If resource is on remote "
             + "filesystem, must be a file: " + srcPaths[0]);
@@ -906,8 +884,8 @@ public class Client extends Configured implements Tool {
 
     File[] files = file.listFiles();
     if (files == null) { // Not a directory
-      String relativePath =
-          file.getAbsolutePath().substring(root.getAbsolutePath().length() + 1);
+      String relativePath = file.getAbsolutePath()
+          .substring(root.getAbsolutePath().length() + 1);
       try {
         try (FileInputStream in = new FileInputStream(file.getAbsolutePath())) {
           out.putNextEntry(new ZipEntry(relativePath));
@@ -942,16 +920,20 @@ public class Client extends Configured implements Tool {
       while (!exitCritera.get()) {
         try {
           if (!namenodeProperties.isPresent()) {
-            namenodeProperties = DynoInfraUtils.waitForAndGetNameNodeProperties(
-                exitCritera, getConf(), getNameNodeInfoPath(), LOG);
+            namenodeProperties =
+                DynoInfraUtils.waitForAndGetNameNodeProperties(exitCritera,
+                    getConf(), getNameNodeInfoPath(), LOG, numTotalNameNodes);
             if (namenodeProperties.isPresent()) {
               Properties props = namenodeProperties.get();
-              LOG.info("NameNode can be reached via HDFS at: {}",
-                  DynoInfraUtils.getNameNodeHdfsUri(props));
-              LOG.info("NameNode web UI available at: {}",
-                  DynoInfraUtils.getNameNodeWebUri(props));
-              LOG.info("NameNode can be tracked at: {}",
-                  DynoInfraUtils.getNameNodeTrackingUri(props));
+              for (int i = 1; i <= numTotalNameNodes; i++) {
+                LOG.info("NameNode can be reached via HDFS at: {}",
+                    DynoInfraUtils.getNameNodeHdfsUri(props,
+                        String.valueOf(i)));
+                LOG.info("NameNode web UI available at: {}",
+                    DynoInfraUtils.getNameNodeWebUri(props, String.valueOf(i)));
+                LOG.info("NameNode can be tracked at: {}", DynoInfraUtils
+                    .getNameNodeTrackingUri(props, String.valueOf(i)));
+              }
             } else {
               // Only happens if we should be shutting down
               break;
@@ -963,7 +945,8 @@ public class Client extends Configured implements Tool {
               numTotalDataNodes, false, exitCritera, getConf(), LOG);
           break;
         } catch (IOException ioe) {
-          LOG.error("Unexpected exception while waiting for NameNode readiness",
+          LOG.error(
+              "Unexpected exception while waiting for NameNode readiness",
               ioe);
         } catch (InterruptedException ie) {
           return;
@@ -996,12 +979,11 @@ public class Client extends Configured implements Tool {
             + report.getApplicationId());
       }
 
-      LOG.debug(
-          "Got application report from ASM for: appId={}, "
-              + "clientToAMToken={}, appDiagnostics={}, appMasterHost={}, "
-              + "appQueue={}, appMasterRpcPort={}, appStartTime={}, "
-              + "yarnAppState={}, distributedFinalState={}, appTrackingUrl={}, "
-              + "appUser={}",
+      LOG.debug("Got application report from ASM for: appId={}, "
+          + "clientToAMToken={}, appDiagnostics={}, appMasterHost={}, "
+          + "appQueue={}, appMasterRpcPort={}, appStartTime={}, "
+          + "yarnAppState={}, distributedFinalState={}, appTrackingUrl={}, "
+          + "appUser={}",
           infraAppId.getId(), report.getClientToAMToken(),
           report.getDiagnostics(), report.getHost(), report.getQueue(),
           report.getRpcPort(), report.getStartTime(),
@@ -1073,14 +1055,15 @@ public class Client extends Configured implements Tool {
    * Waits for the launched job to complete.
    *
    * @param nameNodeProperties The set of properties with information about the
-   *          launched NameNode.
+   *                           launched NameNode.
    */
   private void launchAndMonitorWorkloadDriver(Properties nameNodeProperties) {
-    URI nameNodeURI = DynoInfraUtils.getNameNodeHdfsUri(nameNodeProperties);
+    URI nameNodeURI = DynoInfraUtils.getNameNodeHdfsUri(nameNodeProperties,
+        DynoConstants.NAMENODE_INDEX_DEFAULT);
     LOG.info("Launching workload job using input path: " + workloadInputPath);
     try {
-      long workloadStartTime =
-          System.currentTimeMillis() + workloadStartDelayMs;
+      long workloadStartTime = System.currentTimeMillis()
+          + workloadStartDelayMs;
       Configuration workloadConf = new Configuration(getConf());
       workloadConf.set(AuditReplayMapper.INPUT_PATH_KEY, workloadInputPath);
       workloadConf.set(AuditReplayMapper.OUTPUT_PATH_KEY, workloadOutputPath);
@@ -1121,7 +1104,7 @@ public class Client extends Configured implements Tool {
         workloadAppState = workloadJob.getJobState();
       } catch (IOException ioe) {
         LOG.warn("Unable to fetch completion status of workload job. Will "
-            + "proceed to attempt to kill it.", ioe);
+                + "proceed to attempt to kill it.", ioe);
       } catch (InterruptedException ie) {
         Thread.currentThread().interrupt();
         return;

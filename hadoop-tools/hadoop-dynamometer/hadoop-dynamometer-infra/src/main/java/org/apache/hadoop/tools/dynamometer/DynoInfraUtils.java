@@ -17,7 +17,6 @@
  */
 package org.apache.hadoop.tools.dynamometer;
 
-import com.google.common.base.Joiner;
 import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.IOException;
@@ -35,6 +34,7 @@ import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Supplier;
+
 import org.apache.commons.io.FileUtils;
 import org.apache.commons.io.IOUtils;
 import org.apache.hadoop.classification.InterfaceAudience;
@@ -59,6 +59,7 @@ import org.codehaus.jackson.JsonParser;
 import org.codehaus.jackson.JsonToken;
 import org.slf4j.Logger;
 
+import com.google.common.base.Joiner;
 
 /**
  * A collection of utilities used by the Dynamometer infrastructure application.
@@ -67,13 +68,14 @@ import org.slf4j.Logger;
 @InterfaceStability.Unstable
 public final class DynoInfraUtils {
 
-  private DynoInfraUtils() {}
+  private DynoInfraUtils() {
+  }
 
   public static final String DYNO_CONF_PREFIX = "dyno.";
   public static final String DYNO_INFRA_PREFIX = DYNO_CONF_PREFIX + "infra.";
 
-  public static final String APACHE_DOWNLOAD_MIRROR_KEY = DYNO_CONF_PREFIX
-      + "apache-mirror";
+  public static final String APACHE_DOWNLOAD_MIRROR_KEY =
+      DYNO_CONF_PREFIX + "apache-mirror";
   // Set a generic mirror as the default.
   public static final String APACHE_DOWNLOAD_MIRROR_DEFAULT =
       "http://mirrors.ocf.berkeley.edu/apache/";
@@ -117,8 +119,8 @@ public final class DynoInfraUtils {
    * {@value APACHE_DOWNLOAD_MIRROR_DEFAULT}.
    *
    * @param destinationDir destination directory to save a tarball
-   * @param version The version of Hadoop to download, like "2.7.4"
-   *                or "3.0.0-beta1"
+   * @param version The version of Hadoop to download, like "2.7.4" or
+   *          "3.0.0-beta1"
    * @param conf configuration
    * @param log logger instance
    * @return The path to the tarball.
@@ -157,13 +159,14 @@ public final class DynoInfraUtils {
    * Get the URI that can be used to access the launched NameNode for HDFS RPCs.
    *
    * @param nameNodeProperties The set of properties representing the
-   *                           information about the launched NameNode.
+   *          information about the launched NameNode.
    * @return The HDFS URI.
    */
-  static URI getNameNodeHdfsUri(Properties nameNodeProperties) {
+  static URI getNameNodeHdfsUri(Properties nameNodeProperties, String index) {
     return URI.create(String.format("hdfs://%s:%s/",
-        nameNodeProperties.getProperty(DynoConstants.NN_HOSTNAME),
-        nameNodeProperties.getProperty(DynoConstants.NN_RPC_PORT)));
+        nameNodeProperties.getProperty(DynoConstants.NN_HOSTNAME + "-" + index),
+        nameNodeProperties
+            .getProperty(DynoConstants.NN_RPC_PORT + "-" + index)));
   }
 
   /**
@@ -171,13 +174,15 @@ public final class DynoInfraUtils {
    * Service RPCs (i.e. from DataNodes).
    *
    * @param nameNodeProperties The set of properties representing the
-   *                           information about the launched NameNode.
+   *          information about the launched NameNode.
    * @return The service RPC URI.
    */
-  static URI getNameNodeServiceRpcAddr(Properties nameNodeProperties) {
+  static URI getNameNodeServiceRpcAddr(Properties nameNodeProperties,
+      String index) {
     return URI.create(String.format("hdfs://%s:%s/",
-        nameNodeProperties.getProperty(DynoConstants.NN_HOSTNAME),
-        nameNodeProperties.getProperty(DynoConstants.NN_SERVICERPC_PORT)));
+        nameNodeProperties.getProperty(DynoConstants.NN_HOSTNAME + "-" + index),
+        nameNodeProperties
+            .getProperty(DynoConstants.NN_SERVICERPC_PORT + "-" + index)));
   }
 
   /**
@@ -185,13 +190,14 @@ public final class DynoInfraUtils {
    * for JMX calls.
    *
    * @param nameNodeProperties The set of properties representing the
-   *                           information about the launched NameNode.
+   *          information about the launched NameNode.
    * @return The URI to the web UI.
    */
-  static URI getNameNodeWebUri(Properties nameNodeProperties) {
+  static URI getNameNodeWebUri(Properties nameNodeProperties, String index) {
     return URI.create(String.format("http://%s:%s/",
-        nameNodeProperties.getProperty(DynoConstants.NN_HOSTNAME),
-        nameNodeProperties.getProperty(DynoConstants.NN_HTTP_PORT)));
+        nameNodeProperties.getProperty(DynoConstants.NN_HOSTNAME + "-" + index),
+        nameNodeProperties
+            .getProperty(DynoConstants.NN_HTTP_PORT + "-" + index)));
   }
 
   /**
@@ -200,16 +206,33 @@ public final class DynoInfraUtils {
    * container.
    *
    * @param nameNodeProperties The set of properties representing the
-   *                           information about the launched NameNode.
+   *          information about the launched NameNode.
    * @return The tracking URI.
    */
-  static URI getNameNodeTrackingUri(Properties nameNodeProperties)
+  static URI getNameNodeTrackingUri(Properties nameNodeProperties, String index)
       throws IOException {
     return URI.create(String.format("http://%s:%s/node/containerlogs/%s/%s/",
-        nameNodeProperties.getProperty(DynoConstants.NN_HOSTNAME),
-        nameNodeProperties.getProperty(Environment.NM_HTTP_PORT.name()),
-        nameNodeProperties.getProperty(Environment.CONTAINER_ID.name()),
+        nameNodeProperties.getProperty(DynoConstants.NN_HOSTNAME + "-" + index),
+        nameNodeProperties
+            .getProperty(Environment.NM_HTTP_PORT.name() + "-" + index),
+        nameNodeProperties
+            .getProperty(Environment.CONTAINER_ID.name() + "-" + index),
         UserGroupInformation.getCurrentUser().getShortUserName()));
+  }
+
+  /**
+   * Get the URI that can be used to access the NameNode namespace for the
+   * NameNode, i.e. the web UI of the NodeManager hosting the NameNode
+   * container.
+   *
+   * @param nameNodeProperties The set of properties representing the
+   *          information about the launched NameNode.
+   * @return The nameservices URI.
+   */
+  static URI getNameNodeNamespace(Properties nameNodeProperties)
+      throws IOException {
+    return URI.create(String.format("hdfs://%s/",
+        nameNodeProperties.getProperty(DynoConstants.NAMENODESERVICES)));
   }
 
   /**
@@ -222,7 +245,7 @@ public final class DynoInfraUtils {
    * @param shouldExit Should return true iff this should stop waiting.
    * @param conf The configuration.
    * @param nameNodeInfoPath The path at which to expect the NameNode
-   *                         information file to be present.
+   *          information file to be present.
    * @param log Where to log information.
    * @return Absent if this exited prematurely (i.e. due to {@code shouldExit}),
    *         else returns a set of properties representing information about the
@@ -230,15 +253,50 @@ public final class DynoInfraUtils {
    */
   static Optional<Properties> waitForAndGetNameNodeProperties(
       Supplier<Boolean> shouldExit, Configuration conf, Path nameNodeInfoPath,
-      Logger log) throws IOException, InterruptedException {
+      Logger log, int totalNode) throws IOException, InterruptedException {
     while (!shouldExit.get()) {
-      try (FSDataInputStream nnInfoInputStream = nameNodeInfoPath
-          .getFileSystem(conf).open(nameNodeInfoPath)) {
+      try (FSDataInputStream nnInfoInputStream =
+          nameNodeInfoPath.getFileSystem(conf).open(nameNodeInfoPath)) {
         Properties nameNodeProperties = new Properties();
         nameNodeProperties.load(nnInfoInputStream);
+        if (nameNodeProperties
+            .getProperty(DynoConstants.NN_HOSTNAME + "-" + totalNode) == null) {
+          log.info("Waiting for " + DynoConstants.NN_HOSTNAME + "-" + totalNode
+              + " property in the nn_info.prop");
+          Thread.sleep(1000);
+          continue;
+        }
         return Optional.of(nameNodeProperties);
       } catch (FileNotFoundException fnfe) {
         log.debug("NameNode host information not yet available");
+        Thread.sleep(1000);
+      } catch (IOException ioe) {
+        log.warn("Unable to fetch NameNode host information; retrying", ioe);
+        Thread.sleep(1000);
+      }
+    }
+    return Optional.empty();
+  }
+
+  static Optional<Properties> waitForAndGetJournalNodeProperties(
+      Supplier<Boolean> shouldExit, Configuration conf,
+      Path journalNodeInfoPath, Logger log)
+      throws IOException, InterruptedException {
+    while (!shouldExit.get()) {
+      try (FSDataInputStream jnInfoInputStream =
+          journalNodeInfoPath.getFileSystem(conf).open(journalNodeInfoPath)) {
+        Properties nameNodeProperties = new Properties();
+        nameNodeProperties.load(jnInfoInputStream);
+        if (nameNodeProperties
+            .getProperty("dfs.namenode.shared.edits.dir") == null) {
+          log.info("Waiting for dfs.namenode.shared.edits.dir"
+              + " property in the jn_config.prop");
+          Thread.sleep(1000);
+          continue;
+        }
+        return Optional.of(nameNodeProperties);
+      } catch (FileNotFoundException fnfe) {
+        log.debug("JournalNode host information not yet available");
         Thread.sleep(1000);
       } catch (IOException ioe) {
         log.warn("Unable to fetch NameNode host information; retrying", ioe);
@@ -253,7 +311,7 @@ public final class DynoInfraUtils {
    * {@code shouldExit} returns true.
    *
    * @param nameNodeProperties The set of properties containing information
-   *                           about the NameNode.
+   *          about the NameNode.
    * @param shouldExit Should return true iff this should stop waiting.
    * @param log Where to log information.
    */
@@ -277,7 +335,7 @@ public final class DynoInfraUtils {
    * have been met or {@code shouldExit} returns true.
    *
    * @param nameNodeProperties The set of properties containing information
-   *                           about the NameNode.
+   *          about the NameNode.
    * @param numTotalDataNodes Total expected number of DataNodes to register.
    * @param shouldExit Should return true iff this should stop waiting.
    * @param log Where to log information.
@@ -297,8 +355,9 @@ public final class DynoInfraUtils {
     waitForNameNodeJMXValue("Number of live DataNodes",
         FSNAMESYSTEM_STATE_JMX_QUERY, JMX_LIVE_NODE_COUNT, minDataNodes,
         numTotalDataNodes * 0.001, false, nameNodeProperties, shouldExit, log);
-    final int totalBlocks = Integer.parseInt(fetchNameNodeJMXValue(
-        nameNodeProperties, FSNAMESYSTEM_STATE_JMX_QUERY, JMX_BLOCKS_TOTAL));
+    final int totalBlocks =
+        Integer.parseInt(fetchNameNodeJMXValue(nameNodeProperties,
+            FSNAMESYSTEM_STATE_JMX_QUERY, JMX_BLOCKS_TOTAL));
     final AtomicBoolean doneWaiting = new AtomicBoolean(false);
     if (triggerBlockReports) {
       // This will be significantly lower than the actual expected number of
@@ -314,8 +373,9 @@ public final class DynoInfraUtils {
           "simple");
       conf.set(CommonConfigurationKeysPublic.HADOOP_SECURITY_AUTHORIZATION,
           "false");
-      final DistributedFileSystem dfs = (DistributedFileSystem) FileSystem
-          .get(getNameNodeHdfsUri(nameNodeProperties), conf);
+      final DistributedFileSystem dfs =
+          (DistributedFileSystem) FileSystem.get(getNameNodeHdfsUri(
+              nameNodeProperties, DynoConstants.NAMENODE_INDEX_DEFAULT), conf);
       log.info("Launching thread to trigger block reports for Datanodes with <"
           + blockThreshold + " blocks reported");
       Thread blockReportThread = new Thread(() -> {
@@ -334,14 +394,13 @@ public final class DynoInfraUtils {
                       JMX_UNDER_REPLICATED_BLOCKS));
               long blockDecrease = lastUnderRepBlocks - underRepBlocks;
               lastUnderRepBlocks = underRepBlocks;
-              if (blockDecrease < 0
-                  || blockDecrease > (totalBlocks * 0.001)) {
+              if (blockDecrease < 0 || blockDecrease > (totalBlocks * 0.001)) {
                 continue;
               }
 
-              String liveNodeListString = fetchNameNodeJMXValue(
-                  nameNodeProperties, NAMENODE_INFO_JMX_QUERY,
-                  JMX_LIVE_NODES_LIST);
+              String liveNodeListString =
+                  fetchNameNodeJMXValue(nameNodeProperties,
+                      NAMENODE_INFO_JMX_QUERY, JMX_LIVE_NODES_LIST);
               Set<String> datanodesToReport = parseStaleDataNodeList(
                   liveNodeListString, blockThreshold, log);
               if (datanodesToReport.isEmpty() && doneWaiting.get()) {
@@ -350,8 +409,8 @@ public final class DynoInfraUtils {
                 break;
               }
               log.info("Queueing {} Datanodes for block report: {}",
-                      datanodesToReport.size(),
-                      Joiner.on(",").join(datanodesToReport));
+                  datanodesToReport.size(),
+                  Joiner.on(",").join(datanodesToReport));
               DatanodeInfo[] datanodes = dfs.getDataNodeStats();
               int cnt = 0;
               for (DatanodeInfo datanode : datanodes) {
@@ -363,7 +422,8 @@ public final class DynoInfraUtils {
                 }
               }
               if (cnt != datanodesToReport.size()) {
-                log.warn("Found {} Datanodes to queue block reports for but "
+                log.warn(
+                    "Found {} Datanodes to queue block reports for but "
                         + "was only able to trigger {}",
                     datanodesToReport.size(), cnt);
               }
@@ -381,15 +441,15 @@ public final class DynoInfraUtils {
           .setUncaughtExceptionHandler(new YarnUncaughtExceptionHandler());
       blockReportThread.start();
     }
-    float maxMissingBlocks = totalBlocks * conf.getFloat(
-        MISSING_BLOCKS_MAX_FRACTION_KEY, MISSING_BLOCKS_MAX_FRACTION_DEFAULT);
-    log.info("Waiting for MissingBlocks to fall below {}...",
-        maxMissingBlocks);
+    float maxMissingBlocks =
+        totalBlocks * conf.getFloat(MISSING_BLOCKS_MAX_FRACTION_KEY,
+            MISSING_BLOCKS_MAX_FRACTION_DEFAULT);
+    log.info("Waiting for MissingBlocks to fall below {}...", maxMissingBlocks);
     waitForNameNodeJMXValue("Number of missing blocks", FSNAMESYSTEM_JMX_QUERY,
         JMX_MISSING_BLOCKS, maxMissingBlocks, totalBlocks * 0.0001, true,
         nameNodeProperties, shouldExit, log);
-    float maxUnderreplicatedBlocks = totalBlocks
-        * conf.getFloat(UNDERREPLICATED_BLOCKS_MAX_FRACTION_KEY,
+    float maxUnderreplicatedBlocks =
+        totalBlocks * conf.getFloat(UNDERREPLICATED_BLOCKS_MAX_FRACTION_KEY,
             UNDERREPLICATED_BLOCKS_MAX_FRACTION_DEFAULT);
     log.info("Waiting for UnderReplicatedBlocks to fall below {}...",
         maxUnderreplicatedBlocks);
@@ -411,8 +471,8 @@ public final class DynoInfraUtils {
       String dataNodeTarget) throws IOException {
     InetSocketAddress datanodeAddr = NetUtils.createSocketAddr(dataNodeTarget);
 
-    ClientDatanodeProtocol dnProtocol = DFSUtilClient
-        .createClientDatanodeProtocolProxy(datanodeAddr,
+    ClientDatanodeProtocol dnProtocol =
+        DFSUtilClient.createClientDatanodeProtocolProxy(datanodeAddr,
             UserGroupInformation.getCurrentUser(), conf,
             NetUtils.getSocketFactory(conf, ClientDatanodeProtocol.class));
 
@@ -424,24 +484,24 @@ public final class DynoInfraUtils {
    * cross some threshold. Continues until the threshold has been crossed or
    * {@code shouldExit} returns true. Periodically logs the current value.
    *
-   * @param valueName The human-readable name of the value which is being
-   *                  polled (for printing purposes only).
+   * @param valueName The human-readable name of the value which is being polled
+   *          (for printing purposes only).
    * @param jmxBeanQuery The JMX bean query to execute; should return a JMX
-   *                     property matching {@code jmxProperty}.
+   *          property matching {@code jmxProperty}.
    * @param jmxProperty The name of the JMX property whose value should be
-   *                    polled.
+   *          polled.
    * @param threshold The threshold value to wait for the JMX property to be
-   *                  above/below.
+   *          above/below.
    * @param printThreshold The threshold between each log statement; controls
-   *                       how frequently the value is printed. For example,
-   *                       if this was 10, a statement would be logged every
-   *                       time the value has changed by more than 10.
+   *          how frequently the value is printed. For example, if this was 10,
+   *          a statement would be logged every time the value has changed by
+   *          more than 10.
    * @param decreasing True iff the property's value is decreasing and this
-   *                   should wait until it is lower than threshold; else the
-   *                   value is treated as increasing and will wait until it
-   *                   is higher than threshold.
+   *          should wait until it is lower than threshold; else the value is
+   *          treated as increasing and will wait until it is higher than
+   *          threshold.
    * @param nameNodeProperties The set of properties containing information
-   *                           about the NameNode.
+   *          about the NameNode.
    * @param shouldExit Should return true iff this should stop waiting.
    * @param log Where to log information.
    */
@@ -489,8 +549,8 @@ public final class DynoInfraUtils {
 
     int objectDepth = 0;
     String currentNodeAddr = null;
-    for (JsonToken tok = parser.nextToken(); tok != null; tok = parser
-        .nextToken()) {
+    for (JsonToken tok = parser.nextToken(); tok != null; tok =
+        parser.nextToken()) {
       if (tok == JsonToken.START_OBJECT) {
         objectDepth++;
       } else if (tok == JsonToken.END_OBJECT) {
@@ -504,7 +564,8 @@ public final class DynoInfraUtils {
             JsonToken valueToken = parser.nextToken();
             if (valueToken != JsonToken.VALUE_NUMBER_INT
                 || currentNodeAddr == null) {
-              throw new IOException(String.format("Malformed LiveNodes JSON; "
+              throw new IOException(String.format(
+                  "Malformed LiveNodes JSON; "
                       + "got token = %s; currentNodeAddr = %s: %s",
                   valueToken, currentNodeAddr, liveNodeJsonString));
             }
@@ -530,15 +591,15 @@ public final class DynoInfraUtils {
    * Fetch a value from the launched NameNode's JMX.
    *
    * @param nameNodeProperties The set of properties containing information
-   *                           about the NameNode.
-   * @param jmxBeanQuery The JMX bean query to execute; should return a
-   *                     JMX property matching {@code jmxProperty}.
+   *          about the NameNode.
+   * @param jmxBeanQuery The JMX bean query to execute; should return a JMX
+   *          property matching {@code jmxProperty}.
    * @param property The name of the JMX property whose value should be polled.
    * @return The value associated with the property.
    */
   static String fetchNameNodeJMXValue(Properties nameNodeProperties,
       String jmxBeanQuery, String property) throws IOException {
-    URI nnWebUri = getNameNodeWebUri(nameNodeProperties);
+    URI nnWebUri = getNameNodeWebUri(nameNodeProperties, "1");
     URL queryURL;
     try {
       queryURL = new URL(nnWebUri.getScheme(), nnWebUri.getHost(),
