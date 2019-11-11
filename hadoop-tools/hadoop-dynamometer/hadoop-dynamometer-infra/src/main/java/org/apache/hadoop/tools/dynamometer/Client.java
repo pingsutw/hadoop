@@ -175,6 +175,8 @@ public class Client extends Configured implements Tool {
   public static final String WORKLOAD_CONFIG_ARG = "workload_config";
   public static final String NUMTOTALNAMENODES_DEFAULT = "1";
   public static final String NUMTOTALJOURNALNODES_DEFAULT = "3";
+  public static final String NUMTOTALNAMENODES = "numTotalNameNodes";
+  public static final String NUMTOTALJOURNALNODES = "numTotalJournalNodes";
 
   private static final String[] ARCHIVE_FILE_TYPES =
       {".zip", ".tar", ".tgz", ".tar.gz"};
@@ -298,10 +300,10 @@ public class Client extends Configured implements Tool {
         "Must specify at least one dependency JAR for the ApplicationMaster");
     this.dependencyJars = dependencyJars;
     opts = new Options();
-    opts.addOption(DynoConstants.NUMTOTALNAMENODES, true,
+    opts.addOption(NUMTOTALNAMENODES, true,
         "Number of Namenodes to be launched (default '("
             + NUMTOTALNAMENODES_DEFAULT + "')");
-    opts.addOption(DynoConstants.NUMTOTALJOURNALNODES, true,
+    opts.addOption(NUMTOTALJOURNALNODES, true,
         "Number of Journalnodes to be launched (default '("
             + NUMTOTALJOURNALNODES_DEFAULT + "')");
     opts.addOption(APPNAME_ARG, true,
@@ -922,7 +924,7 @@ public class Client extends Configured implements Tool {
           if (!namenodeProperties.isPresent()) {
             namenodeProperties =
                 DynoInfraUtils.waitForAndGetNameNodeProperties(exitCritera,
-                    getConf(), getNameNodeInfoPath(), LOG, numTotalNameNodes);
+                    getConf(), getNameNodeInfoPath(), LOG, String.valueOf(numTotalNameNodes));
             if (namenodeProperties.isPresent()) {
               Properties props = namenodeProperties.get();
               for (int i = 1; i <= numTotalNameNodes; i++) {
@@ -1059,7 +1061,7 @@ public class Client extends Configured implements Tool {
    */
   private void launchAndMonitorWorkloadDriver(Properties nameNodeProperties) {
     URI nameNodeURI = DynoInfraUtils.getNameNodeHdfsUri(nameNodeProperties,
-        DynoConstants.NAMENODE_INDEX_DEFAULT);
+        DynoConstants.NAMENODE_DEFAULT_INDEX);
     LOG.info("Launching workload job using input path: " + workloadInputPath);
     try {
       long workloadStartTime = System.currentTimeMillis()

@@ -335,7 +335,7 @@ public class TestDynamometerInfra {
     };
     Optional<Properties> namenodeProperties = DynoInfraUtils
         .waitForAndGetNameNodeProperties(exitCheckSupplier, localConf,
-            client.getNameNodeInfoPath(), LOG, 1);
+            client.getNameNodeInfoPath(), LOG, DynoConstants.NAMENODE_DEFAULT_INDEX);
     if (!namenodeProperties.isPresent()) {
       fail("Unable to fetch NameNode properties");
     }
@@ -418,7 +418,7 @@ public class TestDynamometerInfra {
     // Test that we can successfully write to / read from the cluster
     try {
       URI nameNodeUri = DynoInfraUtils.getNameNodeHdfsUri(namenodeProperties,
-          DynoConstants.NAMENODE_INDEX_DEFAULT);
+          DynoConstants.NAMENODE_DEFAULT_INDEX);
       DistributedFileSystem dynoFS =
           (DistributedFileSystem) FileSystem.get(nameNodeUri, localConf);
       Path testFile = new Path("/tmp/test/foo");

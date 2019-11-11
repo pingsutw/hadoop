@@ -89,12 +89,10 @@ baseHttpPort=50075
 baseRpcPort=9000
 baseServiceRpcPort=9020
 baseShareEditPort=8485
-
 baseJournalHttpPort=8480
 baseJournalRpcPort=8485
 NAMENODE_NAMESPACE=dyno-HA
-
-
+linesPerNNInfoFile=6
 
 rm -rf "$baseDir"
 mkdir -p "$pidDir"
@@ -130,7 +128,7 @@ fi
 
 # Change environment variables for the Hadoop process
 export HADOOP_HOME="$hadoopHome"
-#export HADOOP_PREFIX="$hadoopHome"
+export HADOOP_PREFIX="$hadoopHome"
 export PATH="$HADOOP_HOME/bin:$PATH"
 export HADOOP_HDFS_HOME="$hadoopHome"
 export HADOOP_COMMON_HOME="$hadoopHome"
@@ -160,6 +158,30 @@ find_available_port() {
   echo "$currPort"
 }
 
+copyHdfsFileIfExist() {
+  hdfsFile="$1"
+  localFile="$2"
+  rm -f "$localFile";
+  while ! hdfs_original dfs -copyToLocal "$hdfsFile" "$localFile" ;
+  do
+      echo "Waiting for other container copy $hdfsFile to $localFile";
+      sleep 1;
+  done
+}
+
+copyAndRemoveHdfsFile(){
+  hdfsFile="$1"
+  localFile="$2"
+  # In order to make sure only one container can write Namenode or Journalnode info to local file in the same time,
+  # container will remove file in hdfs, and other containers need to wait for current container to upload Namenode or
+  # Journalnode info to HDFS
+  while ! hdfs_original dfs -copyToLocal -f "$hdfsFile" "$localFile" || ! hdfs_original dfs -rm  "$hdfsFile" ;
+    do
+      echo "Waiting for other container copy $hdfsFile to $localFile";
+      sleep 1;
+    done
+}
+
 configOverrides=(
   -D "hadoop.tmp.dir=${baseDir}"
   -D "hadoop.security.authentication=simple"
@@ -175,22 +197,6 @@ configOverrides=(
 )
 # NOTE: Must manually unset dfs.namenode.shared.edits.dir in configs
 #       because setting it to be empty is not enough (must be null)
-
-nnConfigsOverrides=(
-    -D "dfs.namenode.kerberos.internal.spnego.principal="
-    -D "dfs.hosts="
-    -D "dfs.hosts.exclude="
-    -D "dfs.namenode.legacy-oiv-image.dir="
-    -D "dfs.namenode.kerberos.principal="
-    -D "dfs.namenode.keytab.file="
-    -D "dfs.namenode.safemode.threshold-pct=0.0f"
-    -D "dfs.permissions.enabled=true"
-    -D "dfs.cluster.administrators=\"*\""
-    -D "hadoop.security.impersonation.provider.class=org.apache.hadoop.tools.dynamometer.AllowAllImpersonationProvider"
-    -D "dfs.block.replicator.classname=org.apache.hadoop.tools.dynamometer.BlockPlacementPolicyAlwaysSatisfied"
-    ${configOverrides[@]}
-  )
-
 
 if [[ "$component" = "datanode" ]]; then
 
@@ -233,24 +239,20 @@ if [[ "$component" = "datanode" ]]; then
     -D "dfs.datanode.directoryscan.interval=-1"
     -D "fs.du.interval=43200000"
     -D "fs.getspaceused.jitterMillis=21600000"
-    ${configOverrides[@]}
+    "${configOverrides[@]}"
     "${bpId}"
-    ${listingFiles[@]}
+    "${listingFiles[@]}"
   )
 
   nnConfigLocalPath="$(pwd)/nn_config.prop"
-  rm -f "$nnConfigLocalPath"
   nnConfigRemotePath="$hdfsStoragePath/nn_config.prop"
-  while ! hdfs_original dfs -copyToLocal "$nnConfigRemotePath" "$nnConfigLocalPath" ;
-  do 
-    sleep 1
-  done
-  nnConfigsString=`cat $nnConfigLocalPath`
+  copyHdfsFileIfExist "$nnConfigRemotePath" "$nnConfigLocalPath"
+  nnConfigsString=$(cat "$nnConfigLocalPath")
   nnConfigs=($nnConfigsString)
 
   echo "Executing the following:"
   echo "${HADOOP_HOME}/bin/hadoop org.apache.hadoop.tools.dynamometer.SimulatedDataNodes \
-    $DN_ADDITIONAL_ARGS" "${nnConfigs[@]} "${datanodeClusterConfigs[@]}" "
+    $DN_ADDITIONAL_ARGS" "${nnConfigs[@]}" "${datanodeClusterConfigs[@]}"
   # The argument splitting of DN_ADDITIONAL_ARGS is desirable behavior here
   # shellcheck disable=SC2086
   "${HADOOP_HOME}/bin/hadoop" org.apache.hadoop.tools.dynamometer.SimulatedDataNodes \
@@ -270,28 +272,20 @@ elif [[ "$component" = "journalnode" ]]; then
   jnRpcPort="$(find_available_port "$baseJournalRpcPort")"
   jnHttpPort="$(find_available_port "$baseJournalHttpPort")"
 
-  while ! hdfs_original dfs -copyToLocal -f "$jnConfigRemotePath" "$jnConfigLocalPath" || ! hdfs_original dfs -rm  "$jnConfigRemotePath" ; 
-  do
-    rm -f "$jnConfigLocalPath";
-    sleep 1;
-  done
+  copyAndRemoveHdfsFile "$jnConfigRemotePath" "$jnConfigLocalPath"
+  jnConfigsString=$(cat "$jnConfigLocalPath")
+  journalNodeIndex=$(echo "$jnConfigsString" | tr -dc ';' | wc -c)
 
-  jnConfigsString=`cat $jnConfigLocalPath`
-  journalNodeIndex=`echo $jnConfigsString | tr -dc ';' | wc -c`
-
-  echo "num_journalNode = " $num_journalNode
+  echo "num_journalNode = $num_journalNode"
   if [[ "$journalNodeIndex" -eq 0 ]]; then
     jnConfigsString="qjournal://${nnHostname}:${jnRpcPort};"
-  elif [[ "$journalNodeIndex" -eq $(($num_journalNode-1)) ]]; then
+  elif [[ "$journalNodeIndex" -eq $((num_journalNode-1)) ]]; then
     jnConfigsString="dfs.namenode.shared.edits.dir=${jnConfigsString}${nnHostname}:${jnRpcPort};/$NAMENODE_NAMESPACE"
   else
     jnConfigsString="${jnConfigsString}${nnHostname}:${jnRpcPort};"
   fi
 
-  #debug
-  echo $jnConfigsStringc
-
-  echo $jnConfigsString > $jnConfigLocalPath
+  echo "$jnConfigsString" > "$jnConfigLocalPath"
   hdfs_original dfs -copyFromLocal -f "$jnConfigLocalPath" "$jnConfigRemotePath"
   echo "Uploaded journalnode info to $jnConfigRemotePath"
 
@@ -308,23 +302,15 @@ elif [[ "$component" = "journalnode" ]]; then
     -D "dfs.journalnode.https-address=${nnHostname}:0"
   )
 
-  journalNodeIndex=`cat $jnConfigLocalPath | tr -dc ';' | wc -c`
-  while [ $journalNodeIndex -lt $num_journalNode ] ;
-  do 
-    rm -f "$jnConfigLocalPath" 
-    echo "hdfs_original dfs -copyToLocal -f" "$jnConfigRemotePath" "$jnConfigLocalPath"
-    while ! hdfs_original dfs -copyToLocal -f "$jnConfigRemotePath" "$jnConfigLocalPath" ;
-    do
-      rm -f "$jnConfigLocalPath" 
-      sleep 1
-    done
-    journalNodeIndex=`cat $jnConfigLocalPath | tr -dc ';' | wc -c`
-    # echo "journalNodeIndex=" $journalNodeIndex
+  journalNodeIndex=$(cat "$jnConfigLocalPath" | tr -dc ';' | wc -c)
+  while [ "$journalNodeIndex" -lt "$num_journalNode" ] ;
+  do
+    copyHdfsFileIfExist "$jnConfigRemotePath" "$jnConfigLocalPath"
+    journalNodeIndex=$(cat "$jnConfigLocalPath" | tr -dc ';' | wc -c)
     sleep 1
   done 
 
-  sleep 5
-  jnConfigs=`cat $jnConfigLocalPath`
+  jnConfigs=$(cat "$jnConfigLocalPath")
   jnConfigs=( -D "${jnConfigs}" )
   echo "Executing the following:"
   echo "${HADOOP_HOME}/sbin/hadoop-daemon.sh start journalnode" "${jnConfigs[@]}" "${journalnodeStorage[@]}"
@@ -349,22 +335,14 @@ elif [[ "$component" = "namenode" || "$component" = "standbynamenode" ]]; then
 
   nameNodeIndex=1
   if [[ "$component" = "standbynamenode" ]]; then
-    while ! hdfs_original dfs -copyToLocal -f "$nnInfoRemotePath" "$nnInfoLocalPath" || ! hdfs_original dfs -rm  "$nnInfoRemotePath" ; 
-    do
-      rm -f "$nnInfoLocalPath";
-      sleep 1;
-    done
-    lines=$(wc -l < $nnInfoLocalPath)
-    nameNodeIndex=$(($lines / 6 + 1))
-    while ! hdfs_original dfs -copyToLocal -f "$nnConfigRemotePath" "$nnConfigLocalPath" || ! hdfs_original dfs -rm  "$nnConfigRemotePath" ;
-    do
-      rm -f "$nnConfigLocalPath";
-      sleep 1;
-    done
+    copyAndRemoveHdfsFile "$nnInfoRemotePath" "$nnInfoLocalPath"
+    copyAndRemoveHdfsFile "$nnConfigRemotePath" "$nnConfigLocalPath"
+    lines=$(wc -l < "$nnInfoLocalPath")
+    nameNodeIndex=$((lines / linesPerNNInfoFile + 1))
   fi
 
-  nnConfigsString=`cat $nnConfigLocalPath`
-  nnConfigs=($nnConfigsString)
+  nnConfigsString=$(cat "$nnConfigLocalPath")
+  nnConfigs=( "$nnConfigsString" )
 
   nnHostname="${NM_HOST}"
   nnRpcPort="$(find_available_port "$baseRpcPort")"
@@ -401,9 +379,9 @@ EOF
     if [[ "$nameNodeIndex" -eq 1 ]]; then
     echo DFS_NAMESERVICES=$NAMENODE_NAMESPACE >> $nnInfoLocalPath
     for i in $(eval echo "{1..$num_nameNode}");
-    do
-      ha_clusters="${ha_clusters}nn${i},";
-    done
+      do
+        ha_clusters="${ha_clusters}nn${i},";
+      done
     nnConfigs=(
       -D "dfs.ha.automatic-failover.enabled=true"
       -D "dfs.ha.namenodes.$NAMENODE_NAMESPACE=${ha_clusters}" 
@@ -415,7 +393,7 @@ EOF
       -D "ha.zookeeper.quorum=kevin1:2181,kevin2:2181,kevin3:2181"
       -D "ipc.client.connect.max.retries=30"
       )
-    echo -n "${nnConfigs[@]}" >> $nnConfigLocalPath
+      echo -n "${nnConfigs[@]}" >> "$nnConfigLocalPath"
     fi
 
     nnConfigs=(
@@ -424,12 +402,6 @@ EOF
       -D "dfs.namenode.http-address.$NAMENODE_NAMESPACE.nn$nameNodeIndex=${nnHostname}:${nnHttpPort}" 
       -D "dfs.namenode.https-address.$NAMENODE_NAMESPACE.nn$nameNodeIndex=${nnHostname}:0" 
     )
-
-    echo -n " ${nnConfigs[@]}" >> $nnConfigLocalPath
-    echo "Using the following configs for the namenode:"
-    cat "$nnConfigLocalPath"
-    hdfs_original dfs -copyFromLocal -f "$nnConfigLocalPath" "$nnConfigRemotePath"
-    echo "Uploaded namenode config info to $nnConfigRemotePath"
   else
     nnConfigs=(
       -D "fs.defaultFS=hdfs://${nnHostname}:${nnRpcPort}"
@@ -441,10 +413,17 @@ EOF
     )
   fi
 
+  # shellcheck disable=SC2145
+  echo -n " ${nnConfigs[@]}" >> "$nnConfigLocalPath"
+  echo "Using the following configs for the namenode:"
+  cat "$nnConfigLocalPath"
+  hdfs_original dfs -copyFromLocal -f "$nnConfigLocalPath" "$nnConfigRemotePath"
+  echo "Uploaded namenode config info to $nnConfigRemotePath"
+
   echo "Using the following ports for the namenode:"
   cat "$nnInfoLocalPath"
   hdfs_original dfs -copyFromLocal -f "$nnInfoLocalPath" "$nnInfoRemotePath"
-  
+  echo "Uploaded namenode port info to $nnInfoRemotePath"
 
   if [[ "$NN_FILE_METRIC_PERIOD" -gt 0 ]]; then
     nnMetricOutputFileLocal="$HADOOP_LOG_DIR/namenode_metrics"
@@ -465,43 +444,45 @@ EOF
 
   # waiting other namenodes upload configuration to $nnInfoRemotePath
   if [[ $num_nameNode -gt 1 ]]; then
-    lines=$(wc -l < $nnInfoLocalPath)
-    index=$(($lines / 6))
-    while [ "$index" -lt $num_nameNode ];
+    lines=$(wc -l < "$nnInfoLocalPath")
+    index=$((lines / linesPerNNInfoFile))
+    # Waiting for all other namenodes to upload NameNode Info to HDFS
+    while [ "$index" -lt "$num_nameNode" ];
     do
-      rm -f "$nnInfoLocalPath";
-      while ! hdfs_original dfs -copyToLocal "$nnInfoRemotePath" "$nnInfoLocalPath" ;
-      do
-        echo "Can not copy $nnInfoRemotePath to $nnInfoLocalPath";
-        sleep 1;
-      done
-      lines=$(wc -l < $nnInfoLocalPath)
-      index=$(($lines / 6))
+      copyHdfsFileIfExist "$nnInfoRemotePath" "$nnInfoLocalPath"
+      lines=$(wc -l < "$nnInfoLocalPath")
+      index=$((lines / linesPerNNInfoFile))
     done
-    rm -f "$nnConfigLocalPath";
-    while ! hdfs_original dfs -copyToLocal "$nnConfigRemotePath" "$nnConfigLocalPath" ;
-    do 
-      echo "Can not copy $nnConfigRemotePath to $nnConfigLocalPath"
-      sleep 1;
-    done
-    nnConfigsString=`cat $nnConfigLocalPath`
+    nnConfigRemotePath="$hdfsStoragePath/nn_config.prop"
+    copyHdfsFileIfExist "$nnConfigRemotePath" "$nnConfigLocalPath"
+    nnConfigsString=$(cat "$nnConfigLocalPath")
     nnConfigs=($nnConfigsString)
   fi
-  nnConfigs=( ${nnConfigs[@]} ${nnConfigsOverrides[@]} )
 
-  while ! hdfs_original dfs -copyToLocal "$jnConfigRemotePath" "$jnConfigLocalPath" ;
-    do 
-      echo "Can not copy $jnConfigRemotePath to $jnConfigLocalPath"
-      sleep 1;
-  done
-  jnConfigs=`cat $jnConfigLocalPath`
+  nnConfigsOverrides=(
+    -D "dfs.namenode.kerberos.internal.spnego.principal="
+    -D "dfs.hosts="
+    -D "dfs.hosts.exclude="
+    -D "dfs.namenode.legacy-oiv-image.dir="
+    -D "dfs.namenode.kerberos.principal="
+    -D "dfs.namenode.keytab.file="
+    -D "dfs.namenode.safemode.threshold-pct=0.0f"
+    -D "dfs.permissions.enabled=true"
+    -D "dfs.cluster.administrators=\"*\""
+    -D "dfs.block.replicator.classname=org.apache.hadoop.tools.dynamometer.BlockPlacementPolicyAlwaysSatisfied"
+    -D "hadoop.security.impersonation.provider.class=org.apache.hadoop.tools.dynamometer.AllowAllImpersonationProvider"
+    "${configOverrides[@]}"
+  )
+
+  nnConfigs=( ${nnConfigs[@]} ${nnConfigsOverrides[@]} )
+  copyHdfsFileIfExist "$jnConfigRemotePath" "$jnConfigLocalPath"
+
+  jnConfigs=$(cat "$jnConfigLocalPath")
   jnConfigs=( -D "${jnConfigs}" )
 
   if [[ "$component" = "namenode" ]]; then
-    echo "${HADOOP_HOME}/bin/hdfs namenode ${jnConfigs[@]} ${nnConfigs[@]} ${namenodeStorage[@]} -initializeSharedEdits"
+    echo "${HADOOP_HOME}/bin/hdfs namenode" "${jnConfigs[@]}" "${nnConfigs[@]}" "${namenodeStorage[@]}" "-initializeSharedEdits"
     "${HADOOP_HOME}/bin/hdfs" namenode "${jnConfigs[@]}" "${nnConfigs[@]}" "${namenodeStorage[@]}" -initializeSharedEdits
-  else
-    sleep 20
   fi
   echo "Executing the following:"
   echo "${HADOOP_HOME}/sbin/hadoop-daemon.sh start namenode" "${nnConfigs[@]}" "${namenodeStorage[@]}" "${jnConfigs[@]}" "$NN_ADDITIONAL_ARGS"
@@ -517,7 +498,7 @@ EOF
       echo "${HADOOP_HOME}/bin/hdfs zkfc" "${nnConfigs[@]}" "${namenodeStorage[@]}" "-formatZK"
       yes | "${HADOOP_HOME}/bin/hdfs" zkfc "${nnConfigs[@]}" "${namenodeStorage[@]}" -formatZK 
     fi
-      sleep 20 #waiting ZKFC format
+      sleep 10 #waiting ZKFC format
       echo "Start DFSZkFailoverController daemon:"
       echo "${HADOOP_HOME}/sbin/hadoop-daemon.sh start zkfc" "${nnConfigs[@]}" "${namenodeStorage[@]}"
       yes | "${HADOOP_HOME}/sbin/hadoop-daemon.sh" start zkfc "${nnConfigs[@]}" "${namenodeStorage[@]}"

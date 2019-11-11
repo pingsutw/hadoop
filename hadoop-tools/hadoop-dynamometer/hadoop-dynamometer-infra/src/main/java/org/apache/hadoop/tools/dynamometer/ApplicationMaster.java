@@ -141,8 +141,7 @@ public class ApplicationMaster {
   private AtomicInteger numCompletedStandbyNameNodeContainers =
       new AtomicInteger();
   // Allocated standbynamenodes count so that we know how many standbynamenodes
-  // has the RM
-  // allocated to us
+  // has the RM allocated to us
   private AtomicInteger numAllocatedStandbyNameNodeContainers =
       new AtomicInteger();
   // Count of failed standbynamenodes
@@ -176,16 +175,12 @@ public class ApplicationMaster {
 
   // Launch threads
   private List<Thread> launchThreads = new ArrayList<>();
-  // True iff this AM should launch and manage a StandbyNamanode
-  private boolean launchStanbyNameNode;
 
   // True iff this AM should launch and manage a Namanode
   private boolean launchNameNode;
   // The service RPC address of a remote NameNode to be contacted by the
   // launched DataNodes
   private String namenodeServiceRpcAddress = "";
-
-  Properties nameNodeProperties;
   // Directory to use for remote storage (a location on the remote FS which
   // can be accessed by all components)
   private Path remoteStoragePath;
@@ -205,12 +200,6 @@ public class ApplicationMaster {
 
   // Username of the user who launched this application.
   private String launchingUser;
-
-  private Boolean HAenable = false;
-
-  private AtomicInteger nameNodeIndex = new AtomicInteger();
-
-  private Path namenodeInfoPath;
 
   /**
    * @param args Command line args
@@ -266,7 +255,6 @@ public class ApplicationMaster {
       printUsage(opts);
       return false;
     }
-    amOptions = AMOptions.initFromParser(cliParser);
     Map<String, String> envs = System.getenv();
 
     remoteStoragePath =
@@ -279,7 +267,7 @@ public class ApplicationMaster {
       FSDataOutputStream fout = fs.create(journalNodeInfoPath);
       fout.close();
     } catch (IOException e) {
-      LOG.error("Can not create jn_info.prop at " + namenodeInfoPath + ": {}",
+      LOG.error("Can not create jn_info.prop at " + remoteStoragePath + ": {}",
           e.getMessage());
     }
 
@@ -288,15 +276,13 @@ public class ApplicationMaster {
         envs.get(DynoConstants.JOB_ACL_VIEW_ENV));
     launchingUser = envs.get(Environment.USER.name());
 
+    amOptions = AMOptions.initFromParser(cliParser);
     numTotalStandbyNameNodes =
         Integer.parseInt(envs.get(DynoConstants.NUMTOTALNAMENODES)) - 1;
     numTotalStandbyNameNodeContainers =
         (int) Math.ceil(((double) numTotalStandbyNameNodes)
             / Math.max(1, amOptions.getNameNodesPerCluster()));
 
-    if (numTotalStandbyNameNodes > 0) {
-      HAenable = true;
-    }
     numTotalJournalNodes =
         Integer.parseInt(envs.get(DynoConstants.NUMTOTALJOURNALNODES));
     numTotalJournalNodeContainers =
@@ -374,7 +360,7 @@ public class ApplicationMaster {
     Supplier<Boolean> exitCritera = this::isComplete;
 
     Optional<Properties> namenodeProperties = Optional.empty();
-    Optional<Properties> journalnodeProperties = Optional.empty();
+    Optional<Properties> journalnodeProperties;
 
     if (launchNameNode) {
       // Start JournalNodes first if HA enable
@@ -429,7 +415,7 @@ public class ApplicationMaster {
 
       namenodeProperties =
           DynoInfraUtils.waitForAndGetNameNodeProperties(exitCritera, conf,
-              namenodeInfoPath, LOG, numTotalStandbyNameNodes + 1);
+              namenodeInfoPath, LOG, String.valueOf(numTotalStandbyNameNodes + 1));
       if (!namenodeProperties.isPresent()) {
         cleanup();
         return false;
@@ -448,7 +434,7 @@ public class ApplicationMaster {
       } else {
         namenodeServiceRpcAddress =
             DynoInfraUtils.getNameNodeServiceRpcAddr(namenodeProperties.get(),
-                DynoConstants.NAMENODE_INDEX_DEFAULT).toString();
+                DynoConstants.NAMENODE_DEFAULT_INDEX).toString();
       }
       DynoInfraUtils.waitForNameNodeStartup(namenodeProperties.get(),
           exitCritera, LOG);
@@ -612,7 +598,6 @@ public class ApplicationMaster {
         if (component.equals("NAMENODE")) {
           LOG.info("NameNode container completed; marking application as done");
         }
-
         // increment counters for completed/failed containers
         if (component.equals("JOURNALNODE")) {
           countCompleteContainers(numCompletedJournalNodeContainers,
@@ -633,7 +618,7 @@ public class ApplicationMaster {
     private void countCompleteContainers(AtomicInteger completedContainers,
         AtomicInteger failedContainers, int totalContainers, int exitStatus,
         String component) {
-      int completed = numCompletedDataNodeContainers.incrementAndGet();
+      int completed = completedContainers.incrementAndGet();
       if (0 != exitStatus) {
         failedContainers.incrementAndGet();
       } else {
@@ -656,7 +641,7 @@ public class ApplicationMaster {
         String componentType;
         Resource rsrc = container.getResource();
         if (launchNameNode
-            && rsrc.getMemory() >= amOptions.getJournalNodeMemoryMB()
+            && rsrc.getMemorySize() >= amOptions.getJournalNodeMemoryMB()
             && rsrc.getVirtualCores() >= amOptions.getJournalNodeVirtualCores()
             && numAllocatedJournalNodeContainers.get() < numTotalJournalNodes) {
           journalnodeContainers.put(container.getId(), container);
@@ -672,7 +657,7 @@ public class ApplicationMaster {
           if (journalnodeContainers == null) {
             LOG.error("Received a container with following resources suited "
                 + "for a NameNode but no JournalNode container exists: containerMem="
-                + rsrc.getMemory() + ", containerVcores="
+                + rsrc.getMemorySize() + ", containerVcores="
                 + rsrc.getVirtualCores());
             continue;
           }
@@ -680,7 +665,7 @@ public class ApplicationMaster {
           componentType = "namenode";
           containerLauncher =
               new LaunchContainerRunnable(container, componentType);
-        } else if (rsrc.getMemory() >= amOptions.getNameNodeMemoryMB()
+        } else if (rsrc.getMemorySize() >= amOptions.getNameNodeMemoryMB()
             && rsrc.getVirtualCores() >= amOptions.getNameNodeVirtualCores()
             && numAllocatedStandbyNameNodeContainers
                 .get() < numTotalStandbyNameNodes) {
@@ -846,7 +831,6 @@ public class ApplicationMaster {
       if (isNameNode(containerId)) {
         LOG.error("Failed to stop NameNode container ID " + containerId);
         namenodeContainer = null;
-        markCompleted();
       } else if (isStandbyNameNode(containerId)) {
         LOG.error("Failed to stop StandbyNameNode Container " + containerId);
         datanodeContainers.remove(containerId);
@@ -930,8 +914,8 @@ public class ApplicationMaster {
         addAsLocalResourceFromEnv(DynoConstants.FS_IMAGE_MD5, localResources,
             envs);
       } else if (component.equals(DynoConstants.DATANODE)) {
-        int blockFilesToLocalize =
-            Math.max(1, amOptions.getDataNodesPerCluster());
+        int blockFilesToLocalize = Math.max(1,
+                amOptions.getDataNodesPerCluster());
         for (int i = 0; i < blockFilesToLocalize; i++) {
           try {
             localResources.put(
@@ -953,8 +937,8 @@ public class ApplicationMaster {
     public void run() {
       LOG.info("Setting up container launch context for containerid="
           + container.getId() + ", component= " + component);
-      ContainerLaunchContext ctx =
-          Records.newRecord(ContainerLaunchContext.class);
+      ContainerLaunchContext ctx = Records
+              .newRecord(ContainerLaunchContext.class);
 
       // Set the environment
       ctx.setEnvironment(amOptions.getShellEnv());
@@ -975,7 +959,7 @@ public class ApplicationMaster {
       nmClientAsync.startContainerAsync(container, ctx);
       LOG.info("Starting {}; track at: http://{}/node/containerlogs/{}/{}/",
           component, container.getNodeHttpAddress(), container.getId(),
-          launchingUser);
+              launchingUser);
     }
 
     /**
