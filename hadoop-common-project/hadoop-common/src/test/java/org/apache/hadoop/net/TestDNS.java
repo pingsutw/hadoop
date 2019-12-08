@@ -30,6 +30,7 @@ import javax.naming.NameNotFoundException;
 
 import org.apache.hadoop.util.Time;
 
+import org.junit.Assume;
 import org.junit.Test;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -168,15 +169,15 @@ public class TestDNS {
     try {
       String s = DNS.reverseDns(localhost, null);
       LOG.info("Local reverse DNS hostname is " + s);
-    } catch (NameNotFoundException | CommunicationException e) {
+    } catch (Exception e) {
       if (!localhost.isLinkLocalAddress() || localhost.isLoopbackAddress()) {
         //these addresses probably won't work with rDNS anyway, unless someone
         //has unusual entries in their DNS server mapping 1.0.0.127 to localhost
-        LOG.info("Reverse DNS failing as due to incomplete networking", e);
         LOG.info("Address is " + localhost
                 + " Loopback=" + localhost.isLoopbackAddress()
                 + " Linklocal=" + localhost.isLinkLocalAddress());
       }
+      Assume.assumeNoException("Reverse DNS failing as due to incomplete networking", e);
     }
   }
 
